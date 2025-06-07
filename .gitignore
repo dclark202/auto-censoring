@@ -1,0 +1,16 @@
+# Virtual environments
+.venv/
+env/
+venv/
+.venv311/
+
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Logs and other stuff you mentioned
+logs/.venv311/
