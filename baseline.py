@@ -1,10 +1,16 @@
 """
-    find_explicit is the main function here
+    find_explicit is the main function here. 
 
+    Inputs:
+        - audio_path = path for the input file
+        - whisper_type = 'large-v3-turbo' by default
+        - delete_splits = deletes the vocals and instruments splits, True by default
+        - save_log = saves a lot of the explicit content, True by default
+        - additional_curses = Add more words you want to search for
 
+    Outputs:
+        - Transcription of lyrics w/ timestamps 
 """
-
-
 
 import whisper
 import torch
@@ -75,9 +81,14 @@ def transfer_metadata(original_audio_path, edited_audio_path):
     audio_edit.save()
     return
 
+#
+def seconds_to_minutes(time):
+    mins = int(time // 60)
+    secs = int(time % 60)
+    return f"{mins}m {secs}s"
 
 ####
-def find_explicit(audio_path, whisper_type='large-v3-turbo', delete_splits=True, save_log=True, additional_curses={}):
+def find_explicit(audio_path, whisper_type='large-v3-turbo', delete_splits=True, save_log=True, additional_curses=set()):
     
     ## Define paths
     full_audio_path = os.path.abspath(audio_path)
@@ -138,7 +149,7 @@ def find_explicit(audio_path, whisper_type='large-v3-turbo', delete_splits=True,
 
     if len(df) == 0:
         print("\n--No explicit content found--")
-        return
+        return df_all
 
     else:
         print(f"\n(!) {len(df)} instances of explicit content found (!)\n")
@@ -184,4 +195,5 @@ def find_explicit(audio_path, whisper_type='large-v3-turbo', delete_splits=True,
 
     print('Words removed:')
     print(df)
-    return
+
+    return df_all
