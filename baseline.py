@@ -147,16 +147,16 @@ def find_explicit(audio_path, whisper_type='large-v3-turbo', delete_splits=True,
     df_all['explicit'] = df_all['word'].str.contains(pattern, case=False, na=False, regex=True).astype(int)
     df = df_all[df_all['explicit']==1]
 
+    if save_log:
+            csv_name = os.path.join(directory, f"{file_name}-transcribed.csv")
+            df_all.to_csv(csv_name, index=False)
+
     if len(df) == 0:
         print("\n--No explicit content found--")
         return df_all
 
-    else:
-        print(f"\n(!) {len(df)} instances of explicit content found (!)\n")
-        if save_log:
-            csv_name = os.path.join(directory, f"{file_name}-explicit.csv")
-            df.to_csv(csv_name, index=False)
-    
+    print(f"\n(!) {len(df)} instances of explicit content found (!)\n")
+        
     ## Create list of times to mute
     times = []
     for row in df.itertuples():
