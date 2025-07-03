@@ -1,0 +1,11 @@
+torch
+torchaudio
+whisper
+transformers
+pydub
+demucs.separate
+mutagen.easyid3
+re
+os
+pandas
+
