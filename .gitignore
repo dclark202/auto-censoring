@@ -14,3 +14,9 @@ __pycache__/
 
 # Logs and other stuff you mentioned
 logs/.venv311/
+
+# Audio files
+*.wav
+
+# Data directories
+/data/DALI-dicts/
