@@ -117,14 +117,10 @@ def seconds_to_minutes(time):
 
 def process_audio(audio_path, model, device, delete_splits=True, save_log=True, additional_curses=set(), additional_times=[]):
 
-    print('----------\n')
-
     output_dir = os.path.abspath('./edited')
     
     if not os.path.exists(output_dir):
         os.mkdir(output_dir)
-
-        print(f'- Processing audio at {audio_path}')
     
     full_audio_path = os.path.abspath(audio_path)
     audio_directory = os.path.dirname(audio_path)
@@ -140,23 +136,21 @@ def process_audio(audio_path, model, device, delete_splits=True, save_log=True, 
 
     # mmake sure an appropriate audio file has been given
     if file_ext not in {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aiff'}:
-        print(f'(!) Improper file type ({file_ext}), exiting')
-        return []
+        yield f'Error (!) Improper file type ({file_ext})'
+        return 
     
     # demucs is particular about path formatting
     demucs_path = os.path.abspath(f"separated/mdx_extra/song_to_edit")
     vocals_path = os.path.join(demucs_path, "vocals.wav")
     no_vocals_path = os.path.join(demucs_path, "no_vocals.wav")
 
-    if os.path.isfile(vocals_path) and os.path.isfile(no_vocals_path):
-        print(f"- Isolated vocals and instruments tracks already exist ({demucs_path})")
 
-    else:
-        # separate vocals and instruments
-        print("- Loading demucs. This will separate the vocals and instrument stems\n")
-        demucs.separate.main(["--two-stems", "vocals", "-n", "mdx_extra", temp_audio_path])
+    # separate vocals and instruments
+    yield f"- Initializing demucs. This will separate the vocals and instrument stems"
+
+    demucs.separate.main(["--two-stems", "vocals", "-n", "mdx_extra", temp_audio_path])
     
-    print(f'\n- Transcribing track with Whisper on {device} (note: you may get Triton kernel issues)')
+    yield f'- Transcribing track with Whisper'
 
     
     result = model.transcribe(vocals_path, 
@@ -205,13 +199,13 @@ def process_audio(audio_path, model, device, delete_splits=True, save_log=True, 
     #times = sorted(list(set(times.extend(additional_times))))
 
     if not times:
-        print('\n-- No explicit content found --')
+        yield '\n-- No explicit content found --'
         
         res ={'output_path': None, 'full_transcript': transcript['lines'], 'explicit_log': []}
         
-        return res
+        yield res
 
-    print(f'- Explicit content found ({len(times)} {'item' if len(times) == 1 else 'items'}). Applying edits.')
+    yield f'- Explicit content found ({len(times)} {'item' if len(times) == 1 else 'items'}). Applying edits.'
 
     silence_audio_segment(vocals_path, vocals_path, times)
 
@@ -230,9 +224,9 @@ def process_audio(audio_path, model, device, delete_splits=True, save_log=True, 
 
     res = {'output_path': output_path, 'full_transcript': transcript['lines'], 'explicit_log': explicit}
     
-    print('----------')
-    print('Process finished')
-    print(f'- Edited audio file saved in {output_dir}')
+    
+    yield '----------\nProcess finished'
+    yield f'- Please download your edited files'
 
     if device == 'cuda':
         torch.cuda.empty_cache()
@@ -241,7 +235,8 @@ def process_audio(audio_path, model, device, delete_splits=True, save_log=True, 
     os.remove(vocals_path)
     os.remove(no_vocals_path)
     os.rmdir(demucs_path)
-    return res
+
+    yield res
 
 def process_audio_batch(audio_paths, model_name='medium.en', delete_splits=True, save_log=True, additional_curses=set()):
 
