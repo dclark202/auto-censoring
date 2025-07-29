@@ -11,8 +11,7 @@ This tool can process files one at a time or in batches. The webapp allows the u
 - Obtain a [Genius API key](https://genius.com/api-clients) and place it in the `GENIUS_API_TOKEN` variable in `fsp.py`
 
 ## Running the app
-- To start the web interface locally run <p style="text-align:center"> `python app.py` </p>. (Warning: running this app locally in any reasonable amount of time requires a CUDA enabled GPU with a minimum of 12GB of VRAM (recommended 16GB+)
-
+- To start the web interface locally run `python app.py`. (Warning: running this app locally in any reasonable amount of time requires a CUDA enabled GPU with a minimum of 12GB of VRAM (recommended 16GB+)
 - Remote hosting via huggingface (coming soon!)
 
 ### Credits
