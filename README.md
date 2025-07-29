@@ -9,4 +9,4 @@
 
 ## Warning
 
-Running this app locally in any reasonable amount of time will require a CUDA capable GPU with at least 16GB of VRAM
+Running this app locally in any reasonable amount of time will require a CUDA capable GPU with a minimum of 12GB of VRAM (16GB+ preferred)
