@@ -7,4 +7,6 @@
 
 `python app.py` to start the web interface
 
-- Running this app locally in any reasonable amount of time will require a CUDA capable GPU with at least 16GB of VRAM
+# Warning
+
+Running this app locally in any reasonable amount of time will require a CUDA capable GPU with at least 16GB of VRAM
