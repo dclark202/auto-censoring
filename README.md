@@ -14,7 +14,7 @@ This tool can process files one at a time or in batches. The webapp allows the u
 - To start the web interface locally run `python app.py`. (Warning: running this app locally in any reasonable amount of time requires a CUDA enabled GPU with a minimum of 12GB of VRAM (recommended 16GB+)
 - Remote hosting via huggingface (coming soon!)
 
-### Credits
+## Credits
 - Training data comes from the [DALI Dataset](https://zenodo.org/records/2577915)
 
 
