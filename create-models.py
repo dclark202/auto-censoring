@@ -1,15 +1,23 @@
 import torch
+from peft import PeftModel
 from transformers import WhisperForConditionalGeneration
 from transformers import AutoModelForSequenceClassification
 
 print('Creating Whisper model...')
-model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-medium.en")
+# 1. Load the base model
+base_model_name = "openai/whisper-medium.en"
+base_model = WhisperForConditionalGeneration.from_pretrained(base_model_name)
 
-final_layer_weights = torch.load('./data/proj_out_ft.pt')
-model.proj_out.load_state_dict(final_layer_weights)
+# 2. Load the LoRA adapter onto the base model
+lora_config_dir = "./lora-config"
+model = PeftModel.from_pretrained(base_model, lora_config_dir)
 
-model.save_pretrained('./whisper-medium-ft')
+# 3. Merge to the whisper model and save the full thing
+merged_model = model.merge_and_unload()
+merged_model.save_pretrained("./whisper-medium-ft")
 print('Done.')
+
+########## 
 
 print('Creating toxicity classifier...')
 

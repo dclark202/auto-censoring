@@ -1,329 +1,190 @@
 import gradio as gr
-import pandas as pd
 import os
 import torch
 import whisper
 import whisper_timestamped as whisper_t
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 import time
-from fsp import process_audio, default_curse_words
+import re
+import html
+import json
+from fsp import analyze_audio, apply_censoring, default_curse_words, seconds_to_minutes
 
-### Toxicity classifier 
+# --- Load Models and Set Up ---
+model_path = 'whisper-medium-ft'
 print('Loading toxicity classifier...')
-tox_model_name = "cardiffnlp/twitter-roberta-large-sensitive-multilabel"
-tox_ft_path = "roberta_search" # Fine tuned by Shuo
-
+tox_ft_path = "roberta_search"
 tox_tokenizer = AutoTokenizer.from_pretrained(tox_ft_path)
 tox_model = AutoModelForSequenceClassification.from_pretrained(tox_ft_path)
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+tox_model.to(device)
+tox_pipe = pipeline("text-classification", model=tox_model, tokenizer=tox_tokenizer, device=device, top_k=2)
 
-device = 'cuda' if torch.cuda.is_available() else 'cpu' 
-tox_model.to(device) 
-pipe = pipeline("text-classification", model=tox_model, tokenizer=tox_tokenizer, device=device, top_k=2) # top_2 returns both labels
-
-## Returns True if "toxic" label is > .5, False otherwise
 def is_explicit(s):
-    toxic = 0
-
-    for d in pipe(s)[0]:
-        if d['label'] != 'LABEL_1': 
-            continue
-
-        # Select the one for LABEL_1 = Toxic (LABEL_0 is non)
-        toxic = d['score']
-
-    return toxic > 0.5 # This particular classifier is almost alaways effectively 0 or 1...
-#######################
-
-# Helper functions
-def seconds_to_minutes(time_in_seconds):
-    """Converts seconds to a 'mm m ss s' format."""
-    if time_in_seconds is None:
-        return "0m 0s"
-    
-    minutes = int(time_in_seconds // 60)
-    seconds = int(time_in_seconds % 60)
-    
-    return f"{minutes}m {seconds}s"
-
-def generate_output_views(file_results):
-    """
-    Generates HTML strings for the explicit log and full transcript.
-    """
-    if not file_results:
-        # Return empty strings if there are no results to display
-        return "", ""
-
-    # Explicit log view (list of censored words)
-    log_data = file_results.get('explicit_log', [])
-    log_html = ""
-    
-    if not log_data:
-        log_html = "<p><i>No explicit content found.</i></p>"
-    
-    else:
-        log_html = "<table><thead><tr><th>Word</th><th>Start</th><th>End</th><th>Probability</th></tr></thead><tbody>"
-        
-        for item in log_data:
-            log_html += f"<tr><td>{item.get('word','')}</td><td>{item.get('start','')}</td><td>{item.get('end','')}</td><td>{item.get('prob','')}</td></tr>"
-        
-        log_html += "</tbody></table>"
-
-    # Full transcript view
-    transcript_data = file_results.get('full_transcript', [])
-    transcript_html = ""
-    
-    if not transcript_data:
-        transcript_html = "<p><i>Transcript not available.</i></p>"
-    
-    else:
-        explicit_words_in_file = {item['word'].lower() for item in log_data}
-        
-        transcript_html = "<table><thead><tr><th>Time</th><th>Line</th><th>Explicit</th></tr></thead><tbody>"
-        
-        for segment in transcript_data:
-            start_time = seconds_to_minutes(segment.get('start'))
-            end_time = seconds_to_minutes(segment.get('end'))
-            line = segment.get('line', '').strip()
-            
-            line_lower = line.lower()
-            contains_explicit = is_explicit(line_lower)
-
-            explicit_flag = "⚠️" if contains_explicit else ""
-            formatted_line = f"<strong>{line}</strong>" if contains_explicit else line
-
-            transcript_html += f"<tr><td>{start_time} - {end_time}</td><td>{formatted_line}</td><td style='text-align:center'>{explicit_flag}</td></tr>"
-        
-        transcript_html += "</tbody></table>"
-
-    return log_html, transcript_html
+    if not s.strip(): return False
+    try:
+        result = tox_pipe(s)[0]
+        for d in result:
+            if d['label'] == 'LABEL_1': return d['score'] > 0.5
+    except Exception: return False
+    return False
 
 def format_metadata_header(filename, metadata):
-    """Creates a formatted Markdown string for the details header."""
-    title = metadata.get('title', 'N/A')
-    artist = metadata.get('artist', 'N/A')
-    album = metadata.get('album', 'N/A')
-    year = metadata.get('year', 'N/A')
-    genius_url = metadata.get('genius_url')
-    wer_score = metadata.get('wer_score')
-
-    # For fomr
+    title, artist, album, year = metadata.get('title', 'N/A'), metadata.get('artist', 'N/A'), metadata.get('album', 'N/A'), metadata.get('year', 'N/A')
+    genius_url, wer_score = metadata.get('genius_url'), metadata.get('wer_score')
     genius_link = f"**[View lyrics on Genius]({genius_url})**" if genius_url else ""
-    wer_display = f"| similarity score = {wer_score} (0.0 = perfect match, 1.0 = completely wrong)" if wer_score else ""
+    wer_display = f"| similarity score = {wer_score} (lower is better)" if wer_score else ""
+    return f"### Details for: *{filename}*\n**Artist:** {artist} | **Song:** {title} | **Album:** {album} ({year})\n{genius_link} {wer_display}"
 
-    # Displayed over each track's info
-    header = f"""
-    ### Details for: *{filename}*
-    **Artist:** {artist} | **Song:** {title} | **Album:** {album} ({year})\n
-    {genius_link} {wer_display}
-    """
+def generate_static_transcript(transcript_data, initial_times):
+    initial_times_set = {f"{t['start']}-{t['end']}" for t in initial_times}
+    table_header = "<table><thead><tr><th>Time</th><th>Line</th><th>Explicit Line</th></tr></thead><tbody>"
+    table_rows = []
+    for segment in transcript_data:
+        start_time_str, end_time_str = seconds_to_minutes(segment.get('start')), seconds_to_minutes(segment.get('end'))
+        words_in_line = segment.get('line_words', [])
+        full_line_text = " ".join([word['text'] for word in words_in_line])
+        explicit_flag = "⚠️" if is_explicit(full_line_text) else ""
+        formatted_words = []
+        for word in words_in_line:
+            word_id = f"{word['start']}-{word['end']}"
+            if word_id in initial_times_set:
+                formatted_words.append(f"<s>{html.escape(word['text'])}</s>")
+            else:
+                formatted_words.append(html.escape(word["text"]))
+        formatted_line = " ".join(formatted_words)
+        table_rows.append(f"<tr><td>{start_time_str} - {end_time_str}</td><td>{formatted_line}</td><td style='text-align:center'>{explicit_flag}</td></tr>")
+    return table_header + "".join(table_rows) + "</tbody></table>"
 
-    return header
-
-def update_display(evt: gr.SelectData, all_results: dict):
-    """
-    Called when a user selects a file. Updates the header, log, and transcript views.
-    """
-    selected_filename = os.path.basename(evt.value)
-    base_filename = selected_filename.replace("-edited.mp3", "")
-    
-    key_found = None
-    
-    for key in all_results.keys():
-        if base_filename in key:
-            key_found = key
-            break
-            
-    if key_found:
-        file_results = all_results.get(key_found)
-        log_html, transcript_html = generate_output_views(file_results)
-        header_md = format_metadata_header(key_found, file_results.get('metadata', {}))
-
-        return header_md, log_html, transcript_html
-    
-    else:
-        # Return empty views if results for the selected file are not found
-        return "File details not found.", "", ""
-
-
-###################################################################
-
-
-model_path = 'whisper-medium-ft'
-
-def process_audio_files(files, selected_model_name, progress=gr.Progress(track_tqdm=True)):
-    """
-    Takes files from the Gradio input, processes them, and yields final results.
-    Shows a loading screen with a progress bar during processing.
-    """
-    # Show loading screen, hide main content, hide details view
-    yield gr.update(visible=False), gr.update(visible=True), gr.update(visible=False), None, "", {}, "", "", ""
-
+def handle_batch_analysis(files, selected_model_name, progress=gr.Progress()):
     if not files:
-        yield gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), None, "Please upload one or more audio files.", {}, "", "", ""
-        return
-    
-    # Set device and some 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    num_files = len(files)
-    output_file_paths = []
-    all_results = {}
-    
-    start_time = time.time()
+        raise gr.Error("Please upload one or more audio files.")
 
-    # Load the selected whisper model
+    yield gr.update(visible=False), gr.update(visible=False), gr.update(visible=True), None, None, None, None
+
     try:
-        if selected_model_name != 'fine-tuned':
-            model = whisper.load_model(selected_model_name, device=device)
-            fine_tuned = False
-        
-        else:
-            model = whisper_t.load_model(model_path, device=device)
-            fine_tuned = True
-    
+        model, fine_tuned = (whisper.load_model(selected_model_name, device=device), False) if selected_model_name != 'fine-tuned' else (whisper_t.load_model(model_path, device=device), True)
     except Exception as e:
-        error_message = f"Error loading Whisper model '{selected_model_name}': {e}."
-        
-        # Show main view on error
-        yield gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), None, f"**Error:** {error_message}", {}, "", "", ""
-        
-        return
+        raise gr.Error(f"Error loading Whisper model: {e}")
 
-    ## Process bar isn't working yet...#########################################################################
-    for i, file in enumerate(files):
-        # --- Progress Bar Update ---
-        eta_str = "Calculating..."
-        
-        if i > 0:
-            elapsed = time.time() - start_time
-            avg_time_per_track = elapsed / i
-            eta_seconds = avg_time_per_track * (num_files - i)
-            eta_str = f"{int(eta_seconds // 60)}m {int(eta_seconds % 60)}s"
+    all_results = {}
+    num_files = len(files)
+    for i, audio_file in enumerate(files):
+        progress((i + 1) / num_files, desc=f"Analyzing File {i + 1} of {num_files}")
+        filename = os.path.basename(audio_file.name)
+        analysis_state = analyze_audio(audio_file.name, model, device, fine_tuned, progress=None)
+        all_results[filename] = analysis_state
 
-        # Handle filenames
-        original_filename = os.path.basename(file.name)
-        
-        # I want this to appear in the Loading Screen
-        progress((i) / num_files, desc=f"Processing {i+1}/{num_files}: {original_filename} (ETA: {eta_str})")
-        #########################################################################################################
+    file_list = list(all_results.keys())
+    first_file_results = all_results[file_list[0]]
+    header = format_metadata_header(file_list[0], first_file_results['metadata'])
+    transcript_html = generate_static_transcript(first_file_results['transcript'], first_file_results['initial_explicit_times'])
 
-        final_result_for_file = None
-        
-        for update in process_audio(audio_path=file.name, model=model, device=device, delete_splits=True, fine_tuned=fine_tuned):
-            if isinstance(update, dict):
-                final_result_for_file = update
+    yield gr.update(visible=False), gr.update(visible=True), gr.update(visible=False), all_results, gr.update(choices=file_list, value=file_list[0]), header, transcript_html
 
-        if not final_result_for_file:
-            continue
+def update_details_view(selected_filename, all_results):
+    if not selected_filename or not all_results:
+        return "", ""
+    
+    file_results = all_results[selected_filename]
+    header = format_metadata_header(selected_filename, file_results['metadata'])
+    transcript_html = generate_static_transcript(file_results['transcript'], file_results['initial_explicit_times'])
+    return header, transcript_html
+
+def handle_batch_finalization(all_results, progress=gr.Progress()):
+    if not all_results:
+        raise gr.Error("No active analysis session. Please process files first.")
+
+    yield gr.update(visible=False), gr.update(visible=True), gr.update(visible=False), None, None, None, None
+
+    output_paths = []
+    num_files = len(all_results)
+    for i, (filename, analysis_state) in enumerate(all_results.items()):
+        progress((i + 1) / num_files, desc=f"Applying Censorship to File {i + 1} of {num_files}")
+        times_to_censor = analysis_state.get('initial_explicit_times', [])
+        output_path = apply_censoring(analysis_state, times_to_censor, progress=None)
+        if output_path:
+            output_paths.append(output_path)
             
-        all_results[original_filename] = {'explicit_log': final_result_for_file.get('explicit_log', []), 
-                                          'full_transcript': final_result_for_file.get('full_transcript', []),
-                                          'metadata': final_result_for_file.get('metadata', {})}
-        
-        if final_result_for_file.get('output_path'):
-            output_file_paths.append(final_result_for_file['output_path'])
+    status_message = f"✅ **Success!** {len(output_paths)} of {len(all_results)} files have been censored."
 
-    final_status = f"✅ **Processing complete:** {len(output_file_paths)} of {num_files} file(s) were edited in {seconds_to_minutes(time.time() - start_time)}."
-    
-    initial_header, initial_log, initial_transcript = "", "", ""
-    
-    details_visible = False
-    
-    if all_results:
-        details_visible = True
-        first_filename = next(iter(all_results))
-        file_results = all_results[first_filename]
-        initial_header = format_metadata_header(first_filename, file_results.get('metadata', {}))
-        initial_log, initial_transcript = generate_output_views(file_results)
-
-    # Hide loading screen, show main content and details with results
-    yield gr.update(visible=True), gr.update(visible=False), gr.update(visible=details_visible), output_file_paths, final_status, all_results, initial_header, initial_log, initial_transcript
-
-
-# Gradio interface CSS
-css = """
-#loading-view {
-    justify-content: center;
-    align-items: center;
-    height: 70vh;
-}
-
-#loading-view .center-text {
-    text-align: center;
-}
-
-#process-button {
-    background-color: #3d9c3e !important;
-    color: white !important;
-    transition: background-color 0.2s;
-}
-
-#process-button:hover {
-    background-color: #284f29 !important;
-}
-"""
-
-
-## 
-with gr.Blocks(theme=gr.themes.Soft(), title='FSP Finder', css=css) as demo:
-    results_state = gr.State({})
-
-    gr.Markdown(
-        """
-        # FSP Finder - AI powered explicit content detector
-        
-        Upload audio tracks to automatically detect and silence explicit words. Edited audio files with appear in the list on the right. Click an output file to view the list of censored words along with a full transcript.
-        
-        For source code and more details, visit our [github page](https://github.com/dclark202/auto-censoring).
-        """
+    # This final yield statement is updated
+    yield (
+        gr.update(visible=True),      # review_view
+        gr.update(visible=False),     # loading_view
+        gr.update(visible=True),      # final_view
+        status_message,               # final_status_output
+        output_paths,                 # edited_files_output
+        gr.update(visible=True),      # processed_files_selector (REVERTED: stays visible)
+        gr.update(visible=False)      # apply_button (still disappears)
     )
 
-    # --- Loading Screen View (hidden by default) ---
-    with gr.Column(visible=False, elem_id="loading-view") as loading_view:
-        gr.Markdown("# ⏳ Processing... Please Wait", elem_classes="center-text")
+# --- Gradio UI Definition ---
+css = """
+#main-container { max-width: 1250px; margin: auto; }
+#loading-view { min-height: 500px; display: flex; justify-content: center; align-items: center; }
+#apply-button { background-color: #3d9c3e !important; color: white !important; }
+s { color: #d32f2f; text-decoration: line-through; }
+"""
+
+with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
+    analysis_results_state = gr.State(None)
+
+    with gr.Column(elem_id="main-container"):
+        gr.Markdown("# FSP Finder - AI Powered Explicit Content Detector")
+        gr.Markdown("Detects and automatically censors explicit content in audio tracks. For source code and more details, visit our [github page](https://github.com/dclark202/auto-censoring).")
+        gr.Markdown("---")
+
+        with gr.Column(visible=True) as upload_view:
+            gr.Markdown("### How to use:")
+            gr.Markdown('- Upload one or more audio files in the box below. Most audio formats accepted (e.g., `.mp3`, `.wav`, etc.).')
+            gr.Markdown("- Select a Whisper model (Our fine-tuned model `fine-tuned` is recommended).")
+            gr.Markdown('- Click "Process audio" to transcribe the uploaded tracks. Explicit content will be highlighted in red in the transcript of each track. Please allow ~30--60s for each track to be processed.')
+            gr.Markdown("- Note: Whisper's decoding is not deterministic, and it can sometimes get confused with audio. If a transcribed song appears to be inaccurate (e.g., a line may contain the same word repeated *many* times), please try running the program again on that song.")
+
+            files_input = gr.File(label="Upload audio files", file_count="multiple", file_types=["audio"])
+            whisper_model_selector = gr.Dropdown(label="Select Whisper model", choices=['medium.en', 'large-v3', 'fine-tuned'], value='fine-tuned', interactive=True)
+            process_button = gr.Button("Process audio")
         
+        with gr.Column(visible=False) as review_view:
+            gr.Markdown("### Review transcripts and apply edits")
+            gr.Markdown('- Edits are not applied until clicking "Apply all edits" below.')
+            gr.Markdown('- Note: The "Explicit line" column will have a flag if the line was determined to be explicit using our fine-tuned [toxicity filter](https://huggingface.co/cardiffnlp/twitter-roberta-large-sensitive-multilabel). This flag may be raised due to explicit content beyond curse words. We are currently working on allowing users to select additional words to censor from the full transcript.')
+            with gr.Row(variant="panel"):
+                # Left column for file list, button, and final downloads
+                with gr.Column(scale=1):
+                    processed_files_selector = gr.Radio(label="Select a file to view its transcript", interactive=True)
+                    apply_button = gr.Button("Apply all edits", elem_id="apply-button")
+                    with gr.Column(visible=False) as final_view:
+                        final_status_output = gr.Markdown()
+                        edited_files_output = gr.File(label="Download your edited files", file_count="multiple")
 
-    # --- Main Application View (visible by default) ---
-    with gr.Column(visible=True, elem_id="main-view") as main_view:
-        with gr.Row():
-            with gr.Column(scale=1):
-                files_input = gr.File(label="Upload audio files", file_count="multiple", file_types=["audio"])
-                whisper_model_selector = gr.Dropdown(label="Select Whisper Model",
-                                                     choices=['medium.en', 'large-v3', 'fine-tuned'],
-                                                     value='fine-tuned',
-                                                     interactive=True)
-                
-                process_button = gr.Button("Process audio tracks", elem_id="process-button")
-                
-                with gr.Accordion("Words to censor (click to expand)", open=False):
-                        
-                        word_list_str = ", ".join(sorted(list(default_curse_words)))
-                        
-                        gr.Markdown(word_list_str)
-
-            with gr.Column(scale=3):
-                final_status_output = gr.Markdown()
-                edited_files_output = gr.File(label="Edited audio files (Click a file to see details)", file_count="multiple")
-                
-                # --- Details view, hidden until processing is done ---
-                with gr.Column(visible=False) as details_view:
+                # Right column for details
+                with gr.Column(scale=3):
                     details_header = gr.Markdown()
-                   
-                    with gr.Accordion("Censored words", open=True):
-                        log_output = gr.HTML()
-
                     with gr.Accordion("Full audio transcript", open=True):
                         transcript_output = gr.HTML()
 
+        with gr.Column(visible=False, elem_id="loading-view") as loading_view:
+            gr.Markdown("## ⏳ Processing... please wait")
 
     # --- Event Handlers ---
-    process_button.click(fn=process_audio_files,
-                         inputs=[files_input, whisper_model_selector],
-                         outputs=[main_view, loading_view, details_view, edited_files_output, final_status_output, results_state, details_header, log_output, transcript_output]
-                         )
+    process_button.click(
+        fn=handle_batch_analysis,
+        inputs=[files_input, whisper_model_selector],
+        outputs=[upload_view, review_view, loading_view, analysis_results_state, processed_files_selector, details_header, transcript_output]
+    )
 
-    edited_files_output.select(fn=update_display,
-                               inputs=[results_state],
-                               outputs=[details_header, log_output, transcript_output]
-                               )
+    processed_files_selector.change(
+        fn=update_details_view,
+        inputs=[processed_files_selector, analysis_results_state],
+        outputs=[details_header, transcript_output]
+    )
+    
+    apply_button.click(
+        fn=handle_batch_finalization,
+        inputs=[analysis_results_state],
+        outputs=[review_view, loading_view, final_view, final_status_output, edited_files_output, processed_files_selector, apply_button]
+    )
 
 demo.launch(share=True)
