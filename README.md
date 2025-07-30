@@ -7,7 +7,7 @@ This tool can process files one at a time or in batches. The webapp allows the u
 
 ## Requirements 
 - `pip install -r requirements.txt` to install the necessary packages
-- Run `python create-models.py` in the base repo folder to create the fine-tuned models
+- Save the config files from [this link](https://drive.google.com/drive/folders/1ptaOvIyqDhAf8wgF__Td6PwpP5vr89vJ?usp=drive_link) in the `./data` folder. Then run `python create-models.py` in the base repo folder to create the fine-tuned models
 - Obtain a [Genius API key](https://genius.com/api-clients) and place it in the `GENIUS_API_TOKEN` variable in `fsp.py`
 
 ## Running the app
