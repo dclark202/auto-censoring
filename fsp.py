@@ -11,10 +11,10 @@ import jiwer
 import shutil
 import tempfile
 
-GENIUS_API_TOKEN = ""  # your token here
+GENIUS_API_TOKEN = os.getenv("GENIUS_API_TOKEN") # Or your key here!
 genius = lyricsgenius.Genius(GENIUS_API_TOKEN, verbose=False, remove_section_headers=True)
 
-default_curse_words = {'fuck', 'shit', 'piss', 'bitch', 'nigg', 'cock', 'faggot', 'cunt', 'pussy', 'dick', 'whore', 'goddam'}
+default_curse_words = {'fuck', 'shit', 'piss', 'bitch', 'nigg', 'cock', 'faggot', 'cunt', 'damn', 'pussy', 'dick', 'asshole', 'whore', 'goddam'}
 
 # --- Helper Functions (remove_punctuation, get_metadata, etc.) ---
 def remove_punctuation(s):
@@ -57,7 +57,15 @@ def transfer_metadata(original_audio_path, edited_audio_path):
 def seconds_to_minutes(time):
     mins = int(time // 60)
     secs = int(time % 60)
-    return f"{mins}m {secs}s"
+
+    if secs == 0:
+        return f'{mins}:00'
+
+    elif secs < 10:
+        return f'{mins}:0{secs}'
+
+    else:
+        return f"{mins}:{secs}"
 
 def get_genius_url(artist, song_title):
     if not artist or not song_title or artist == 'N/A' or song_title == 'N/A': return None
@@ -163,28 +171,26 @@ def analyze_audio(audio_path, model, device, fine_tuned=True, progress=None):
 def apply_censoring(analysis_state, times_to_censor, progress=None):
     """
     Takes the state from analyze_audio and a final list of timestamps,
-    applies silencing, and creates the final audio file.
+    applies silencing, and creates the final audio file in the temp directory.
     """
     if not times_to_censor:
-        # If nothing to censor, just clean up and return nothing.
-        shutil.rmtree(analysis_state['temp_dir'])
+        # If there's nothing to censor, we don't need to do anything.
+        # The temporary directory will be cleaned up by the app logic.
         return None
     
     if progress: progress(0, desc="Applying silence to vocal track...")
     times_in_ms = [(int(t['start']*1000), int(t['end']*1000)) for t in times_to_censor]
     silence_audio_segment(analysis_state['vocals_path'], analysis_state['vocals_path'], times_in_ms)
-
-    output_dir = os.path.abspath('./edited')
-    if not os.path.exists(output_dir): os.makedirs(output_dir, exist_ok=True)
     
     base_name = os.path.splitext(analysis_state['original_filename'])[0]
-    output_path = os.path.join(output_dir, f"{base_name}-edited.mp3")
+    # MODIFIED: Save the output file to the existing temporary directory.
+    output_path = os.path.join(analysis_state['temp_dir'], f"{base_name}-edited.mp3")
 
     if progress: progress(0.6, desc="Combining audio tracks...")
     combine_audio(analysis_state['vocals_path'], analysis_state['no_vocals_path'], output_path)
     transfer_metadata(analysis_state['original_audio_path_copy'], output_path)
 
-    # Clean up all temporary files
-    shutil.rmtree(analysis_state['temp_dir'])
+    # MODIFIED: The temporary directory is no longer removed here.
+    # Cleanup will be handled by the main application UI logic.
 
     return output_path
