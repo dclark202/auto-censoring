@@ -2,7 +2,7 @@
 
 **FSP (Foul Speech Pattern) Finder** is an AI-powered explicit content detector and automatic censoring tool useful for preparing music files for radio airplay. We use a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to detect explicit content in music files. Vocals stems are split using [demucs](https://github.com/facebookresearch/demucs) and muted at the identified times to produce an edited file suitable for the air. 
 
-This tool can process files one at a time or in batches. The webapp allows the user to view the full transcript of each track along with the time and words that were automatically censored. Additionally, you'll get a link to the [Genius](https://genius.com/) entry for the lyrics of the track, along with a similarity score ([MER](https://lightning.ai/docs/torchmetrics/stable/text/match_error_rate.html)), for cross referencing accuracy. 
+This tool can process files one at a time or in batches. The webapp allows the user to view the full transcript of each track along with the words that will be censored. Additionally, you'll get a link to the [Genius](https://genius.com/) entry for the lyrics of the track, along with a similarity score ([MER](https://lightning.ai/docs/torchmetrics/stable/text/match_error_rate.html)), for cross referencing accuracy. 
 
 
 ## Requirements 
