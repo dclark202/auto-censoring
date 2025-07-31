@@ -11,8 +11,10 @@ This tool can process files one at a time or in batches. The webapp allows the u
 - A [Genius API key](https://genius.com/api-clients). This key should be placed it in the `GENIUS_API_TOKEN` variable in `fsp.py` (or set as `GENIUS_API_TOKEN` in your system environment)
 
 ## Running the app
-- To start the web interface locally run `python app.py`. (Warning: running this app locally in any reasonable amount of time requires a CUDA enabled GPU with a minimum of 12GB of VRAM (recommended 16GB+)
+- To start the web interface locally run `python app.py`. (On first execution `app.py` will convert the configuration files in `lora_config` to a full Whisper model stored at `whisper-medium-ft`) 
 - Remote hosting via huggingface (coming soon!)
+
+**Note**: Running this app locally in any reasonable amount of time will require a CUDA enabled GPU with a minimum of 12GB of VRAM (recommended 16GB or more)
 
 ## Credits
 - Training data comes from the [DALI Dataset](https://zenodo.org/records/2577915)
