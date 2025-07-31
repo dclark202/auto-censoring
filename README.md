@@ -6,7 +6,8 @@ This tool can process files one at a time or in batches. The webapp allows the u
 
 
 ## Requirements 
-- `pip install -r requirements.txt` to install the necessary packages
+- `pip install -r requirements.txt` to install the necessary dependencies
+- [`ffmpeg`](https://ffmpeg.org/) for handling mp3 files
 - Obtain a [Genius API key](https://genius.com/api-clients) and place it in the `GENIUS_API_TOKEN` variable in `fsp.py` (or set as `GENIUS_API_TOKE` in your system environment)
 
 ## Running the app
