@@ -8,7 +8,7 @@ This tool can process files one at a time or in batches. The webapp allows the u
 ## Requirements 
 - `pip install -r requirements.txt` to install the necessary dependencies
 - [`ffmpeg`](https://ffmpeg.org/) for handling mp3 files
-- A [Genius API key](https://genius.com/api-clients). This key should be placed it in the `GENIUS_API_TOKEN` variable in `fsp.py` (or set as `GENIUS_API_TOKE` in your system environment)
+- A [Genius API key](https://genius.com/api-clients). This key should be placed it in the `GENIUS_API_TOKEN` variable in `fsp.py` (or set as `GENIUS_API_TOKEN` in your system environment)
 
 ## Running the app
 - To start the web interface locally run `python app.py`. (Warning: running this app locally in any reasonable amount of time requires a CUDA enabled GPU with a minimum of 12GB of VRAM (recommended 16GB+)
