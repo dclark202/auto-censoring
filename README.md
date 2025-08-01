@@ -12,7 +12,7 @@ This tool can process files one at a time or in batches. The web interface allow
 - [`ffmpeg`](https://ffmpeg.org/) (for handling mp3 files)
 - A [Genius API key](https://genius.com/api-clients). This key should be placed in the `GENIUS_API_TOKEN` variable in `fsp.py` (or set as `GENIUS_API_TOKEN` in your system environment).
 
-To start the web interface locally execute `python app.py`. On first execution `app.py` will convert the configuration files in `./lora_config` to a full Whisper model stored at `./whisper-medium-ft`.
+To start the web interface locally execute `python app.py` in the project directory. On first execution `app.py` will convert the configuration files in `./lora_config` to a full Whisper model stored at `./whisper-medium-ft`.
 
 **Note**: Running this app locally in any reasonable amount of time will require a CUDA enabled GPU with a minimum of 12GB of VRAM (recommended 16GB or more).
 
@@ -22,7 +22,7 @@ We trained OpenAI/whisper-medium.en, and english-only automatic speech recogniti
 
 From this training data we extracted only those lines that a fine-tuned toxicity version of the [cardiffnlp toxicity classifier](https://huggingface.co/cardiffnlp/twitter-roberta-large-sensitive-multilabel) identified as being explicit. This resulted in a dataset of roughly 2000 audio chunks with timestamps. We split this dataset into train/val/test sets, and trained both (1) a LoRA adapter, and (2) the final LM (also called *proj_out*) layer of our Whisper model. Our fine-tuned Whisper model managed to decrease the [match error rate](https://lightning.ai/docs/torchmetrics/stable/text/match_error_rate.html) (MER) of the test set from 0.58424 to 0.48113 (with a similar decrease in [word error rate](https://en.wikipedia.org/wiki/Word_error_rate) from 0.64305 to 0.52992). Specifically by training *only* on explicit content, our model has become very sensitive to explicit content, with the goal of minimizing false negatives.
 
-Training notebooks for creating the audio files and metdata for DALI, along with preparing the Whisper dataset, and fine-tuning the model can all be found in the `./notebooks` folder. In addition, the notebooks found in `./notebooks/line-dataset-normalizer` played a crucial role in cleaning our data: the lyrics transcriptions in the DALI dataset often contained spelling error, unneccesary spaces or word concatenations, or other punctuation which prevented Whisper from correctly identifying the transcript. 
+Training notebooks for creating the audio files and metdata for DALI, along with preparing the Whisper dataset, and fine-tuning the model can all be found in the `./notebooks` folder. In addition, the notebooks found in `./notebooks/line-dataset-normalizer` played a crucial role in cleaning our data: the lyrics transcriptions in the DALI dataset often contained spelling error, unneccesary spaces and word concatenations, or other punctuation which prevented Whisper from correctly identifying the transcript. 
 
 ## Future implementation
 - Our main priority is to implement the ability for the user to add their own words to the list of words to be censored by highlighting additional words in the full transcript provided by the model
