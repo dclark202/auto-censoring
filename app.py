@@ -13,7 +13,15 @@ import shutil
 from fsp import analyze_audio, apply_censoring, default_curse_words, seconds_to_minutes
 from datetime import datetime
 
-# MODIFIED: Print start time and filename
+
+###### Ideas ########
+# - Javascript for toggling individual words to mute --> playright
+# - Use LLM to determine what is "explicit" in the ouputs --> structured output?
+# - Mute explicit nonvocal sounds: e.g., gun shots, sex scenes, etc.
+# - Additional words to censor at the beginning screen ?
+
+
+# Print the start time
 print(f"Executing {os.path.basename(__file__)} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 ################ Load models
@@ -33,6 +41,7 @@ tox_pipe = pipeline("text-classification", model=tox_model, tokenizer=tox_tokeni
 ## 2. Create our Whisper model from the LoRA weights
 ## Whisper_timestamped requires the entire model to be saved, this saves static storage space by only saving the lora config
 def load_whisper_model(model_path, lora_config, base_model_name="openai/whisper-medium.en"):
+    # If the model exists already we're good to go
     if os.path.exists('./whisper-medium-ft/model.safetensors'):
         print(f'Fine tuned model at {model_path} already exists')
         return
@@ -52,11 +61,11 @@ def load_whisper_model(model_path, lora_config, base_model_name="openai/whisper-
 model_path = 'whisper-medium-ft'
 lora_config = './lora_config'
 
-# Uncheck when uploaded to hf
 load_whisper_model(model_path=model_path, lora_config=lora_config)
 
 ###### Helper functions #######
 
+# Metadata display for the full transcriptions. Includes genius link if possible
 def format_metadata_header(filename, metadata, explicit_word_count):
     title, artist, album, year = metadata.get('title', 'N/A'), metadata.get('artist', 'N/A'), metadata.get('album', 'N/A'), metadata.get('year', 'N/A')
     genius_url, wer_score = metadata.get('genius_url'), metadata.get('wer_score')
@@ -69,6 +78,7 @@ def format_metadata_header(filename, metadata, explicit_word_count):
         
     return f"### Details for: *{filename}*\n**Artist:** {artist} | **Song:** {title} | **Album:** {album} ({year}) {genius_link} {wer_display}{status_message}"
 
+# Creates the table of the transcription
 def generate_static_transcript(transcript_data, initial_times):
     initial_times_set = {f"{t['start']}-{t['end']}" for t in initial_times}
     table_header = "<table><thead><tr><th style='width: 125px;'>Time</th><th>Line transcript</th><th>Explicit flag(s)</th></tr></thead><tbody>"
@@ -124,6 +134,7 @@ def generate_static_transcript(transcript_data, initial_times):
         
     return table_header + "".join(table_rows) + "</tbody></table>"
 
+# Execute the whisper model for transcription
 def handle_batch_analysis(files, progress=gr.Progress()):
     if not files:
         raise gr.Error("Please upload one or more audio files.")
@@ -143,7 +154,7 @@ def handle_batch_analysis(files, progress=gr.Progress()):
         analysis_state = analyze_audio(audio_file.name, model, device, fine_tuned, progress=None)
         all_results[filename] = analysis_state
         # MODIFIED: Print filename to console after transcription
-        print(f"Transcription complete for: {filename}")
+        print(f"Transcription complete for: {filename} (file {i+1} of {num_files})")
 
     file_list = list(all_results.keys())
     first_file_results = all_results[file_list[0]]
@@ -152,6 +163,7 @@ def handle_batch_analysis(files, progress=gr.Progress()):
     transcript_html = generate_static_transcript(first_file_results['transcript'], first_file_results['initial_explicit_times'])
     
     # Check if ANY file has explicit content to determine if the apply button should be active
+    # If not, display no edits to make
     any_explicit_content = any(len(res['initial_explicit_times']) > 0 for res in all_results.values())
     if any_explicit_content:
         apply_button_update = gr.update(interactive=True, value="Apply all edits")
@@ -169,6 +181,7 @@ def handle_batch_analysis(files, progress=gr.Progress()):
         apply_button_update
     )
 
+# Selecting between different transcripts
 def update_details_view(selected_filename, all_results):
     if not selected_filename or not all_results:
         return "", ""
@@ -179,6 +192,7 @@ def update_details_view(selected_filename, all_results):
     transcript_html = generate_static_transcript(file_results['transcript'], file_results['initial_explicit_times'])
     return header, transcript_html
 
+# Apply the edits to all songs
 def handle_batch_finalization(all_results, progress=gr.Progress()):
     if not all_results:
         raise gr.Error("No active analysis session. Please process files first.")
@@ -204,6 +218,7 @@ def handle_batch_finalization(all_results, progress=gr.Progress()):
         gr.update(visible=False)
     )
 
+# Clear temp files and return to start
 def return_to_start(all_results):
     """Cleans up all temporary directories and resets the UI to its initial state."""
     if all_results:
@@ -230,7 +245,9 @@ def return_to_start(all_results):
     )
 
 
-######  Gradio UI Definition  ########
+######  Gradio UI   ########
+
+## CSS for formatting
 css = """
 #main-container { max-width: 1250px; margin: auto; }
 #main-container .prose { font-size: 15px !important; }
@@ -244,11 +261,13 @@ s { color: #d32f2f; text-decoration: line-through; }
 with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
     analysis_results_state = gr.State(None)
 
+    # Main header. Persistent over all pages
     with gr.Column(elem_id="main-container"):
         gr.Markdown("# FSP Finder - AI-powered explicit content detector")
         gr.Markdown("Detects and automatically censors explicit content in music files. For source code and more details, visit our [github page](https://github.com/dclark202/auto-censoring).")
         gr.Markdown("---")
 
+        # Upload page
         with gr.Column(visible=True) as upload_view:
             gr.Markdown("### How to use")
             gr.Markdown('- Upload one or more audio files using the box below. Most common audio formats are accepted (e.g., `.mp3`, `.wav`, etc.).')
@@ -261,6 +280,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
             gr.Markdown('### How it works')
             gr.Markdown("This app uses a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to create a lyrics transcript of the uploaded music files. Explicit content (e.g., curse words) are then searched for in the lyrics transcript and highlighted. The vocals stem of the track is split off from the song using [demucs](https://github.com/facebookresearch/demucs) and muted at the appropriate times to create a high-quality edited version of the song.")
 
+        # Results page
         with gr.Column(visible=False) as review_view:
             gr.Markdown("### Review transcript(s) and apply edits")
             gr.Markdown(f'Words to be censored will appear in <caption>{html.escape("red strikethrough")}</s> text in the transcript below. Apply edits by clicking **Apply all edits** below.')
@@ -288,28 +308,35 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
                     with gr.Accordion("Full audio transcript", open=True):
                         transcript_output = gr.HTML()
 
+        # Processing page. I want this to display more information about what is happening behind the scenes
+        # e.g., to inform the user that the program has not just crashed
         with gr.Column(visible=False, elem_id="loading-view") as loading_view:
             gr.Markdown("## ⏳ Processing... please wait")
 
-    # --- Event Handlers ---
+    # Buttons
+
+    # Process all inputs
     process_button.click(
         fn=handle_batch_analysis,
         inputs=[files_input],
         outputs=[upload_view, review_view, loading_view, analysis_results_state, processed_files_selector, details_header, transcript_output, apply_button]
     )
 
+    # Select between multiple files
     processed_files_selector.change(
         fn=update_details_view,
         inputs=[processed_files_selector, analysis_results_state],
         outputs=[details_header, transcript_output]
     )
     
+    # Apply edits
     apply_button.click(
         fn=handle_batch_finalization,
         inputs=[analysis_results_state],
         outputs=[review_view, loading_view, final_view, final_status_output, edited_files_output, processed_files_selector, apply_button]
     )
 
+    # Go back to start. The JS for the confirmation is not working!
     return_to_start_button.click(
         fn=return_to_start,
         inputs=[analysis_results_state],
@@ -329,4 +356,5 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
         js="() => { if (confirm('Are you sure you want to return to the start? All current analysis will be lost.')) { return true; } else { return false; } }"
     )
 
+# Made a little favicon :)
 demo.launch(share=True, favicon_path='fav.png')
