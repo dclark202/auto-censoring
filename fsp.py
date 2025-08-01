@@ -14,7 +14,7 @@ import tempfile
 GENIUS_API_TOKEN = os.getenv("GENIUS_API_TOKEN") # Or your key here!
 genius = lyricsgenius.Genius(GENIUS_API_TOKEN, verbose=False, remove_section_headers=True)
 
-default_curse_words = {'fuck', 'shit', 'piss', 'bitch', 'nigg', 'cock', 'faggot', 'cunt', 'clint', 'tits', 'pussy', 'dick', 'asshole', 'whore', 'goddam'}
+default_curse_words = {'fuck', 'shit', 'piss', 'bitch', 'nigg', 'cock', 'faggot', 'cunt', 'clit', 'tits', 'pussy', 'dick', 'asshole', 'whore', 'goddam'}
 
 # --- Helper Functions (remove_punctuation, get_metadata, etc.) ---
 def remove_punctuation(s):
@@ -128,12 +128,13 @@ def analyze_audio(audio_path, model, device, fine_tuned=True, progress=None):
     full_transcript = []
     initial_explicit_times = []
     
+    prev_word = ''
+    prev_start, prev_end = 0.0, 0.0
+
     for segment in result["segments"]:
         segment_words = []
-        seg = segment.get('words', [])
-        prev_word = ''
-
-        for i, word_info in enumerate(seg):
+        
+        for word_info in segment.get('words', []):
             word_text = word_info.get(word_key, '').strip()
             if not word_text: continue
             
@@ -146,17 +147,16 @@ def analyze_audio(audio_path, model, device, fine_tuned=True, progress=None):
             word_data = {'text': word_text, 'start': start_time, 'end': end_time, 'prob': word_info[prob_key]}
             segment_words.append(word_data)
             
-            if is_explicit:
+            # Handle two word cluster "god dam*", "mother fuck*"
+            if ('dam' in cleaned_word and prev_word == 'god') or ('fuck' in cleaned_word and prev_word == 'mother'):
+                initial_explicit_times.append({'start': prev_start, 'end': prev_end})
                 initial_explicit_times.append({'start': start_time, 'end': end_time})
-            
-            # Handle two word cluster "god damn"
-            if cleaned_word == 'damn' and prev_word == 'god':
-                god_start = seg[i-1]['start']
-                god_end = seg[i-1]['end']
-                initial_explicit_times.append({'start': god_start, 'end': god_end})
+
+            elif is_explicit:
                 initial_explicit_times.append({'start': start_time, 'end': end_time})
 
             prev_word = cleaned_word
+            prev_start, prev_end = start_time, end_time
             
         full_transcript.append({'line_words': segment_words, 'start': segment['start'], 'end': segment['end']})
 

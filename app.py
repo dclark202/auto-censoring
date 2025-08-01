@@ -42,8 +42,8 @@ def load_whisper_model(model_path, lora_config, base_model_name="openai/whisper-
 
     model = PeftModel.from_pretrained(model, lora_config)
 
-    mdoel = model.merge_and_unload()
-    model.save_pretrained(model_path)
+    model = model.merge_and_unload()
+    model.save_pretrained(model_path, save_serialization=False)
     
     print(f'Whisper model from {lora_config} saved at {model_path}')
     return
