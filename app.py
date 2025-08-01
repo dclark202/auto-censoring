@@ -1,7 +1,6 @@
 import gradio as gr
 import os
 import torch
-import whisper
 import whisper_timestamped as whisper_t
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
 from transformers import WhisperForConditionalGeneration
@@ -10,11 +9,14 @@ import time
 import re
 import html
 import json
-import shutil # MODIFIED: Added shutil for directory cleanup
+import shutil
 from fsp import analyze_audio, apply_censoring, default_curse_words, seconds_to_minutes
+from datetime import datetime
+
+# MODIFIED: Print start time and filename
+print(f"Executing {os.path.basename(__file__)} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 ################ Load models
-
 
 ## 1. Toxicity filter. Using the base version 
 print('Loading toxicity classifier...')
@@ -140,6 +142,8 @@ def handle_batch_analysis(files, progress=gr.Progress()):
         filename = os.path.basename(audio_file.name)
         analysis_state = analyze_audio(audio_file.name, model, device, fine_tuned, progress=None)
         all_results[filename] = analysis_state
+        # MODIFIED: Print filename to console after transcription
+        print(f"Transcription complete for: {filename}")
 
     file_list = list(all_results.keys())
     first_file_results = all_results[file_list[0]]
@@ -200,7 +204,6 @@ def handle_batch_finalization(all_results, progress=gr.Progress()):
         gr.update(visible=False)
     )
 
-# MODIFIED: This function now accepts the analysis state to perform cleanup.
 def return_to_start(all_results):
     """Cleans up all temporary directories and resets the UI to its initial state."""
     if all_results:
@@ -247,7 +250,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
         gr.Markdown("---")
 
         with gr.Column(visible=True) as upload_view:
-            gr.Markdown("### How to use:")
+            gr.Markdown("### How to use")
             gr.Markdown('- Upload one or more audio files using the box below. Most common audio formats are accepted (e.g., `.mp3`, `.wav`, etc.).')
             gr.Markdown(f'- Click the **Process audio** button to create the transcriptions of the uploaded track(s). You will have a chance to review the edits before applying the censoring.')
         
@@ -255,7 +258,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
             process_button = gr.Button("Process audio", elem_id="upload-view")
         
             gr.Markdown('---')
-            gr.Markdown('### How it works:')
+            gr.Markdown('### How it works')
             gr.Markdown("This app uses a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to create a lyrics transcript of the uploaded music files. Explicit content (e.g., curse words) are then searched for in the lyrics transcript and highlighted. The vocals stem of the track is split off from the song using [demucs](https://github.com/facebookresearch/demucs) and muted at the appropriate times to create a high-quality edited version of the song.")
 
         with gr.Column(visible=False) as review_view:
@@ -269,7 +272,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
                         - 🔞 = sexual content
                         
                         We are currently working on allowing users to select additional words to censor from the full transcript, this flag should guide users towards identifying additional potentially explicit lines.""")
-            gr.Markdown("**Note**: Whisper's processing is not deterministic and it can sometimes get confused annd hallucinate with audio. If your transcription seems inaccurate (e.g., a line contains the same word repeated *many* times, or a line contains a significant amount of transcribed text not present in the song), please try running the program again on that song.")
+            gr.Markdown("**Note**: Whisper's processing is not deterministic and it can sometimes get confused and hallucinate with audio. If your transcription seems inaccurate (e.g., a line contains the same word repeated *many* times, or a line contains a significant amount of transcribed text not present in the song), please try running the program again on that song.")
             
             with gr.Row(variant="panel"):
                 with gr.Column(scale=1):
@@ -307,7 +310,6 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
         outputs=[review_view, loading_view, final_view, final_status_output, edited_files_output, processed_files_selector, apply_button]
     )
 
-    # MODIFIED: The click handler now passes the analysis state to the cleanup function.
     return_to_start_button.click(
         fn=return_to_start,
         inputs=[analysis_results_state],
@@ -324,7 +326,7 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
             edited_files_output,
             files_input
         ],
-        js="() => confirm('Are you sure you want to return to the start? All current analysis will be lost.')"
+        js="() => { if (confirm('Are you sure you want to return to the start? All current analysis will be lost.')) { return true; } else { return false; } }"
     )
 
-demo.launch(share=True)
+demo.launch(share=True, favicon_path='fav.png')

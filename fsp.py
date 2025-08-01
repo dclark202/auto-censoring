@@ -14,7 +14,7 @@ import tempfile
 GENIUS_API_TOKEN = os.getenv("GENIUS_API_TOKEN") # Or your key here!
 genius = lyricsgenius.Genius(GENIUS_API_TOKEN, verbose=False, remove_section_headers=True)
 
-default_curse_words = {'fuck', 'shit', 'piss', 'bitch', 'nigg', 'cock', 'faggot', 'cunt', 'damn', 'pussy', 'dick', 'asshole', 'whore', 'goddam'}
+default_curse_words = {'fuck', 'shit', 'piss', 'bitch', 'nigg', 'cock', 'faggot', 'cunt', 'clint', 'tits', 'pussy', 'dick', 'asshole', 'whore', 'goddam'}
 
 # --- Helper Functions (remove_punctuation, get_metadata, etc.) ---
 def remove_punctuation(s):
@@ -130,7 +130,10 @@ def analyze_audio(audio_path, model, device, fine_tuned=True, progress=None):
     
     for segment in result["segments"]:
         segment_words = []
-        for word_info in segment.get('words', []):
+        seg = segment.get('words', [])
+        prev_word = ''
+
+        for i, word_info in enumerate(seg):
             word_text = word_info.get(word_key, '').strip()
             if not word_text: continue
             
@@ -145,7 +148,16 @@ def analyze_audio(audio_path, model, device, fine_tuned=True, progress=None):
             
             if is_explicit:
                 initial_explicit_times.append({'start': start_time, 'end': end_time})
-        
+            
+            # Handle two word cluster "god damn"
+            if cleaned_word == 'damn' and prev_word == 'god':
+                god_start = seg[i-1]['start']
+                god_end = seg[i-1]['end']
+                initial_explicit_times.append({'start': god_start, 'end': god_end})
+                initial_explicit_times.append({'start': start_time, 'end': end_time})
+
+            prev_word = cleaned_word
+            
         full_transcript.append({'line_words': segment_words, 'start': segment['start'], 'end': segment['end']})
 
     transcript_text = " ".join([word['text'] for seg in full_transcript for word in seg['line_words']])
