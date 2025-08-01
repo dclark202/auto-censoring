@@ -1,6 +1,6 @@
 # FSP Finder
 
-Available for use on [Hugging Face Spaces](https://huggingface.co/spaces/dac202/fsp-finder)!
+Available for use on [Hugging Face Spaces](https://huggingface.co/spaces/dac202/fsp-finder)! (warning: working on getting more computational power, using the free CPU provided by Hugging Face it takes about an hour to process a song)
 
 ## About this tool
 **FSP (Foul Speech Pattern) Finder** is an AI-powered explicit content detector and automatic censoring tool useful for preparing music files for radio airplay. We use a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to detect explicit content in music files. Vocals stems are split using [demucs](https://github.com/facebookresearch/demucs) and muted at the identified times to produce an edited file suitable for the air. 
