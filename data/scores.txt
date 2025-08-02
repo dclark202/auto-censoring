@@ -1,0 +1,12 @@
+LARGE 
+
+baseline  {'wer': 0.68351, 'mer': 0.63842}
+proj_out only {'wer': ?, 'mer': 0.49..} 
+LoRA only  {'wer': 0.70328, 'mer': 0.65172}
+
+MEDIUM 
+
+baseline {'wer': 0.64305, 'mer': 0.58424}
+proj_out only  {'wer': 0.59760 , 'mer': 0.53377 }
+LoRA + proj_out {'wer': 0.52992, 'mer': 0.48113}
+LoRA (full dataset) + proj_out' {'wer': ?, 'mer': ?}}
