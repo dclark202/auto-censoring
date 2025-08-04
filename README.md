@@ -3,7 +3,7 @@
 Available for use on [Hugging Face Spaces](https://huggingface.co/spaces/dac202/fsp-finder)! 
 
 ## About this tool
-**FSP (Foul Speech Pattern) Finder** is an AI-powered explicit content detector and automatic censoring tool useful for preparing music files for radio airplay. We use a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to detect explicit content in music files. Vocals stems are split using [demucs](https://github.com/facebookresearch/demucs) and muted at the identified times to produce an edited file suitable for the air. 
+**FSP (Foul Speech Pattern) Finder** is an AI-powered explicit content detector and automatic censoring tool useful for preparing music files for radio airplay. We use a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to transcribe the lyrics of uploaded music files (with word timestamps). Explicit terms (i.e., curse words, racial slurs, etc.) are identified in the transcript, and using [demucs](https://github.com/facebookresearch/demucs), the vocals stem is muted at the identified times producing an edited file suitable for the air. 
 
 This tool can process files one at a time or in batches. The web interface allows the user to view the full transcript of each track along with the words that will be censored. Additionally, you'll get a link to the [Genius](https://genius.com/) entry for the lyrics of the track, along with a similarity score ([MER](https://lightning.ai/docs/torchmetrics/stable/text/match_error_rate.html)), for cross referencing accuracy. 
 
@@ -26,10 +26,11 @@ Training notebooks for creating the audio files and metdata for DALI, along with
 
 ## Future implementation
 - Our main priority is to implement the ability for the user to add their own words to the list of words to be censored by highlighting additional words in the full transcript provided by the model
-- We also will continue to improve our models performance by training on larger sets of data. Finding adequate training data is one of the biggest challenges for improving our performance. 
+- We also will continue to improve our models performance by training on larger sets of data. Finding adequate training data is one of the biggest challenges for improving our performance. Also in the works is censoring "explicit sounds", i.e., non-vocals noises that may be offensive (gun shots, sexually explicit sounds, etc.)
+
 
 ## Credits
-- This project was completed as part of the [Erdos Institute's](https://www.erdosinstitute.org/) Deep Learning Bootcamp in Summer 2025.
+- This project was completed as part of the [Erdos Institute](https://www.erdosinstitute.org/)'s Deep Learning Bootcamp in Summer 2025.
 - All training data comes from the [DALI Dataset](https://zenodo.org/records/2577915).
 
 
