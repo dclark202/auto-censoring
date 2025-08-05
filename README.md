@@ -3,7 +3,7 @@
 Available for use on [Hugging Face Spaces](https://huggingface.co/spaces/dac202/fsp-finder)! 
 
 ## About this tool
-**FSP (Foul Speech Pattern) Finder** is an AI-powered explicit content detector and automatic censoring tool useful for preparing music files for radio airplay. We use a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to transcribe the lyrics of uploaded music files (with word timestamps). Explicit terms (i.e., curse words, racial slurs, etc.) are identified in the transcript, and using [demucs](https://github.com/facebookresearch/demucs), the vocals stem is muted at the identified times producing an edited file suitable for the air. 
+**FSP (Foul Speech Pattern) Finder** is an AI-powered explicit content detector and automatic censoring tool useful for preparing music files for radio airplay. We use a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to transcribe the lyrics of uploaded music files (with word timestamps). Explicit terms (i.e., curse words, racial slurs, etc.) are identified in the transcript and using [demucs](https://github.com/facebookresearch/demucs) the vocals stem is muted at the identified times producing an edited file suitable for the air. 
 
 This tool can process files one at a time or in batches. The web interface allows the user to view the full transcript of each track along with the words that will be censored. Additionally, you'll get a link to the [Genius](https://genius.com/) entry for the lyrics of the track, along with a similarity score ([MER](https://lightning.ai/docs/torchmetrics/stable/text/match_error_rate.html)), for cross referencing accuracy. 
 
@@ -12,9 +12,9 @@ This tool can process files one at a time or in batches. The web interface allow
 - [`ffmpeg`](https://ffmpeg.org/) (for handling mp3 files)
 - A [Genius API key](https://genius.com/api-clients). This key should be placed in the `GENIUS_API_TOKEN` variable in `fsp.py` (or set as `GENIUS_API_TOKEN` in your system environment).
 
-To start the web interface locally execute `python app.py` in the project directory. On first execution `app.py` will convert the configuration files in `./lora_config` to a full Whisper model stored at `./whisper-medium-ft`.
+**Starting the web interface**: In the project directory, execute `python app.py` in the command line 
 
-**Note**: Running this app locally in any reasonable amount of time will require a CUDA enabled GPU with a minimum of 12GB of VRAM (recommended 16GB or more).
+On first execution `app.py` will convert the configuration files in `./lora_config` to a full Whisper model stored at `./whisper-medium-ft` (the full Whisper model is necessary for using [Whisper-timestamped](https://github.com/linto-ai/whisper-timestamped) to produce word timestamps). Please note, running this app locally in any reasonable amount of time will require a CUDA enabled GPU with a minimum of 12GB of VRAM (recommended 16GB or more).
 
 
 ## Training and methodology
@@ -22,12 +22,12 @@ We trained OpenAI/whisper-medium.en, and english-only automatic speech recogniti
 
 From this training data we extracted only those lines that a fine-tuned toxicity version of the [cardiffnlp toxicity classifier](https://huggingface.co/cardiffnlp/twitter-roberta-large-sensitive-multilabel) identified as being explicit. This resulted in a dataset of roughly 2000 audio chunks with timestamps. We split this dataset into train/val/test sets, and trained both (1) a LoRA adapter, and (2) the final LM (also called *proj_out*) layer of our Whisper model. Our fine-tuned Whisper model decreases the [match error rate](https://lightning.ai/docs/torchmetrics/stable/text/match_error_rate.html) (MER) of the test set from 0.58424 to 0.48113 (with a similar decrease in [word error rate](https://en.wikipedia.org/wiki/Word_error_rate) from 0.64305 to 0.52992). These error rates don't tell the whole story though: by specifically training on explicit content our model has become very sensitive to explicit content, with the ultimate goal of minimizing false negatives (i.e., maximizing recall).
 
-Training notebooks for creating the audio files and metdata for DALI, along with preparing the Whisper dataset, and fine-tuning the model can all be found in the `./notebooks` folder. In addition, the notebooks found in `./notebooks/line-dataset-normalizer` played a crucial role in cleaning our data: the lyrics transcriptions in the DALI dataset often contained spelling error, unneccesary spaces and word concatenations, or other punctuation which prevented Whisper from correctly identifying the transcript. `./data` contains the relevant metadata files for the train/val/test sets (i.e., filename, transcript, etc.). 
+Training notebooks for creating the audio files and metdata for DALI, along with preparing the Whisper dataset, and fine-tuning the model can all be found in the `./notebooks` folder. In addition, the notebooks found in `./notebooks/line-dataset-normalizer` played a crucial role in cleaning our data: the lyrics transcriptions in the DALI dataset often contained spelling error, unneccesary spaces and word concatenations, or other punctuation which prevented Whisper from correctly identifying the transcript. The master lists containg the relevant metadata (filename, transcript, etc.) for each of the train/val/test sets is contained in `./data`.
 
 ## Future implementation
-- Our main priority is to implement the ability for the user to add their own words to the list of words to be censored by highlighting additional words in the full transcript provided by the model
-- We also will continue to improve our models performance by training on larger sets of data. Finding adequate training data is one of the biggest challenges for improving our performance. Also in the works is censoring "explicit sounds", i.e., non-vocals noises that may be offensive (gun shots, sexually explicit sounds, etc.)
-
+- Option for the user to add their own words to the list of words to be censored by highlighting additional words in the full transcript provided by the model.
+- Method for censoring "explicit sounds", i.e., non-vocals noises that may be offensive (gun shots, sexually explicit sounds, etc.).
+- Use of a language model to detect context-dependent explicit words (i.e., references to specific drugs or firearms) within lines markes as explicit.
 
 ## Credits
 - This project was completed as part of the [Erdos Institute](https://www.erdosinstitute.org/)'s Deep Learning Bootcamp in Summer 2025.
