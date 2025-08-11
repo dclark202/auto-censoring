@@ -2,8 +2,10 @@
 
 Available for use on [Hugging Face Spaces](https://huggingface.co/spaces/dac202/fsp-finder)! 
 
+[Watch the project video](https://youtu.be/csp4E_csyco)
+
 ## About this tool
-**FSP (Foul Speech Pattern) Finder** is an AI-powered explicit content detector and automatic censoring tool useful for preparing music files for radio airplay. We use a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to transcribe the lyrics of uploaded music files (with word timestamps). Explicit terms (i.e., curse words, racial slurs, etc.) are identified in the transcript and using [demucs](https://github.com/facebookresearch/demucs) the vocals stem is muted at the identified times producing an edited file suitable for the air. 
+**FSP Finder** is an AI-powered foul speech pattern (FSP) detector and automatic censoring tool useful for preparing music files for radio airplay. We use a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to transcribe the lyrics of uploaded music files (with word timestamps). Explicit terms (i.e., curse words, racial slurs, etc.) are identified in the transcript and using [demucs](https://github.com/facebookresearch/demucs) the vocals stem is muted at the identified times producing an edited file suitable for the air. 
 
 This tool can process files one at a time or in batches. The web interface allows the user to view the full transcript of each track along with the words that will be censored. Additionally, you'll get a link to the [Genius](https://genius.com/) entry for the lyrics of the track, along with a similarity score ([MER](https://lightning.ai/docs/torchmetrics/stable/text/match_error_rate.html)), for cross referencing accuracy. 
 
