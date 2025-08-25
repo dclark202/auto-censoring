@@ -339,7 +339,8 @@ def process_transcription(transcription_result):
     raw_transcript = transcription_result.get("segments", [])
     total_lines_number = len(raw_transcript)
 
-    print(f'Processing transcript... {total_lines_number} lines detected')
+    print(f'Processing transcript... {total_lines_number} total lines detected')
+    print('Checking for proper formatting of LLM output:')
 
     for i, segment in enumerate(raw_transcript):
         segment_words = []
@@ -369,6 +370,7 @@ def process_transcription(transcription_result):
         full_transcript.append({'line_words': segment_words, 'line_text': line_text, 'start': segment['start'], 'end': segment['end']})
 
     total_song_words = 0
+    line_OK = []
 
     for i, line_to_analyze in enumerate(full_transcript):
 
@@ -377,12 +379,13 @@ def process_transcription(transcription_result):
         total_song_words += len(text_tokens)
 
         # Store the word_ids of the explicit content
-        print('Starting with the always explicit terms')
+        
         explicit_ids = backup_censoring(text_tokens)
 
         llm_output = parse_llm_json_output(response_text)
 
         if llm_output:
+            line_OK.append(True)
             print(f'Line {i+1} OK')
             explicit_phrases = llm_output.get('explicit_words_found', [])
             for d in explicit_phrases:
@@ -398,8 +401,12 @@ def process_transcription(transcription_result):
                         explicit_ids = explicit_ids | set([k for k in range(j, j+n)])
                         #print(f"Content identified: {d["phrase"]} (reason: {cat})")
                         break
+
+            
         
-        else: print(f'Problem with LLM output at line {i+1}')
+        else: 
+            print(f'-- Problem with LLM output at line {i+1}')
+            line_OK.append(False)
         # try:
         #     # Here we use the LLM for edge case detection. Formatting can be an issue
         #     llm_output = json.loads(response_text)
@@ -429,7 +436,8 @@ def process_transcription(transcription_result):
     return {
         "transcript": full_transcript,
         "initial_explicit_ids": ids_to_mute,
-        "filthiness": filth
+        "filthiness": filth,
+        "line_OK": line_OK
     }
 
 
@@ -509,9 +517,9 @@ def format_metadata_header(filename, metadata, explicit_word_count):
         
     return f"### Details for: *{filename}*\n**Artist:** {artist} | **Song:** {title} | **Album:** {album} ({year}) {genius_link} {wer_display}{status_message}"
 
-def generate_static_transcript(transcript_data, initial_ids):
+def generate_static_transcript(transcript_data, initial_ids, line_OK):
     ids_to_mute = set(initial_ids)
-    table_header = "<table><thead><tr><th style='width: 125px;'>Time</th><th>Line transcript</th></thead><tbody>"
+    table_header = "<table><thead><tr><th style='width: 125px;'>Time</th><th>Line transcript</th><th>LLM error</th></thead><tbody>"
     table_rows = []
 
     for i, segment in enumerate(transcript_data):
@@ -530,7 +538,11 @@ def generate_static_transcript(transcript_data, initial_ids):
                 formatted_words.append(html.escape(word["text"]))
 
         formatted_line = " ".join(formatted_words)
-        table_rows.append(f"<tr><td>{start_time_str} - {end_time_str}</td><td>{formatted_line}</td></tr>")
+
+        if line_OK[i]: LLM_marker = ''
+        else: LLM_marker = '⚠️'
+
+        table_rows.append(f"<tr><td>{start_time_str} - {end_time_str}</td><td>{formatted_line}</td><td>{LLM_marker}</td></tr>")
         
     return table_header + "".join(table_rows) + "</tbody></table>"
 
@@ -560,6 +572,7 @@ def handle_batch_analysis(files, progress=gr.Progress()):
         processed_data = process_transcription(analysis_state['transcription_result'])
         analysis_state['transcript'] = processed_data['transcript']
         analysis_state['initial_explicit_ids'] = processed_data['initial_explicit_ids']
+        analysis_state['line_OK'] = processed_data['line_OK']
         filth = processed_data['filthiness']
 
         # Step 3: Calculate WER score now that we have the processed transcript
@@ -576,7 +589,7 @@ def handle_batch_analysis(files, progress=gr.Progress()):
     first_file_results = all_results[file_list[0]]
     explicit_count_first_file = len(first_file_results['initial_explicit_ids'])
     header = format_metadata_header(file_list[0], first_file_results['metadata'], explicit_count_first_file)
-    transcript_html = generate_static_transcript(first_file_results['transcript'], first_file_results['initial_explicit_ids'])
+    transcript_html = generate_static_transcript(first_file_results['transcript'], first_file_results['initial_explicit_ids'], first_file_results['line_OK'])
     
     any_explicit_content = any(len(res['initial_explicit_ids']) > 0 for res in all_results.values())
     if any_explicit_content:
@@ -603,7 +616,7 @@ def update_details_view(selected_filename, all_results):
     file_results = all_results[selected_filename]
     explicit_word_count = len(file_results['initial_explicit_ids'])
     header = format_metadata_header(selected_filename, file_results['metadata'], explicit_word_count)
-    transcript_html = generate_static_transcript(file_results['transcript'], file_results['initial_explicit_ids'])
+    transcript_html = generate_static_transcript(file_results['transcript'], file_results['initial_explicit_ids'], file_results['line_OK'])
     return header, transcript_html
 
 # Apply the edits to all songs
@@ -697,16 +710,23 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
                         This app uses a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to create lyrics transcripts of the uploaded music files. Explicit words and phrases are as follows. 
                         
                         - Always explicit content (e.g., profanity, slurs) is immediately censored. 
-                        - A language model ([meta-llama](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct)) then detects edge cases (e.g., drug references, sexually inappropriate content).
+                        - A language model ([Google Gemma 2](https://huggingface.co/google/gemma-2-9b-it)) then detects edge cases (e.g., drug references, sexually inappropriate content).
                         
                         Explicit content is highlighted in red strikehtough text in the full transcript. The vocals stem of the track is split off from the song using [demucs](https://github.com/facebookresearch/demucs) and muted at the appropriate times. The result is a high quality edited track, ready for air play.
                         """)
 
         with gr.Column(visible=False) as review_view:
             gr.Markdown("### Review transcript(s) and apply edits")
-            gr.Markdown(f'Words to be censored will appear in <caption>{html.escape("red strikethrough")}</s> text in the transcript below. Apply edits by clicking **Apply all edits** below.')
-            gr.Markdown("**Note**: Language models are not deterministic. If you are unsatisfied with transcript or the edits to be made, please consider running the model again")
+            gr.Markdown(f'Words to be censored will appear in <caption>{html.escape("red strikethrough")}</s> text in the transcript below. Click **Apply all edits** to apply the edits, this will reveal a link to download your edited file(s)')
+            gr.Markdown("""
+                        **Important** Language models are not deterministic and can fail in various ways. 
+                            
+                        - If you find that a portion of the lyrics has not been transcribed correctly/at all, please consider running the tool again on that song
+                        - If the symbol "⚠️" in the rightmost column of a row, this means that the edge case detection for that row was unreadable. This could lead to explicit content failing to be detected and therefore not censored
 
+                        Always check your edited files against an official source to make sure all of the desired explicit content has been detected and censored.    
+                        """)
+            
             with gr.Row(variant="panel"):
                 with gr.Column(scale=1):
                     processed_files_selector = gr.Radio(label="Select a file to view its transcript", interactive=True, elem_id="processed-files-radio")
