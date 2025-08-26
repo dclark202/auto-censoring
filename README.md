@@ -13,7 +13,7 @@ The vocals stem is muted at all times identified to have explicit content and ad
 This tool can process files one at a time or in batches. The web interface allows the user to view the full transcript of each track along with the words that will be censored. Additionally, you'll get a link to the [Genius](https://genius.com/) entry for the lyrics of the track, along with a similarity score ([MER](https://lightning.ai/docs/torchmetrics/stable/text/match_error_rate.html)), for cross referencing accuracy. 
 
 ## Requirements 
-- `pip install -r requirements.txt` to install the necessary dependencies
+- `pip install -r requirements.txt` to install the necessary dependencies (recommend installing PyTorch separately with GPU support)
 - [`ffmpeg`](https://ffmpeg.org/) (for handling mp3 files)
 - Access to [Google Gemma 2](https://huggingface.co/google/gemma-2-9b) (via Hugging Face)
 - A [Genius API key](https://genius.com/api-clients). This key should be placed in the `GENIUS_API_TOKEN` variable in `fsp.py` (or set as `GENIUS_API_TOKEN` in your system environment).
