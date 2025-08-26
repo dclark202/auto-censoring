@@ -342,7 +342,8 @@ def process_transcription(transcription_result):
     print(f'Processing transcript... {total_lines_number} total lines detected')
     print('Checking for proper formatting of LLM output:')
 
-    for i, segment in enumerate(raw_transcript):
+    i = 0
+    for segment in raw_transcript:
         segment_words = []
         
         j = 0
@@ -365,6 +366,8 @@ def process_transcription(transcription_result):
             j += 1
 
         if segment_words == []: continue
+
+        i += 1
 
         line_text = ' '.join([d['text'] for d in segment_words])
         full_transcript.append({'line_words': segment_words, 'line_text': line_text, 'start': segment['start'], 'end': segment['end']})
