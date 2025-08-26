@@ -232,12 +232,12 @@ def analyze_audio(audio_path, model, device, fine_tuned=True, progress=None):
         result = model.transcribe(vocals_path, language='en', task='transcribe', word_timestamps=True)
     else:
         audio = whisper_t.load_audio(vocals_path)
-        result = whisper_t.transcribe(model, audio, beam_size=5, best_of=5, temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0), language="en", task='transcribe')
+        result = whisper_t.transcribe(model, audio, beam_size=5, best_of=5, temperature=(0.0, 0.2, 0.4, 0.6, 0.8), language="en", task='transcribe')
 
     if device == 'cuda': torch.cuda.empty_cache()
     
-    print('Transcription complete.'
-          )
+    print('Transcription complete.')
+    
     return {
         "temp_dir": run_temp_dir,
         "vocals_path": vocals_path,
@@ -265,7 +265,7 @@ def llm_process_line(text_to_analyze):
     {{
         "profanity": ['fuck', 'shit', 'bitch', 'cunt'],
         "drug_references": ['weed', 'coke', 'brick', 'blunt', 'rock', 'swisha', 'spliff', 'chronic', 'lean'],
-        "firearms": ['gat', 'AK', 'uzi', 'piece', 'tech', 'glock', 'beretta', 'forty-five', 'thirty-eight', 'nine'],
+        "firearms": ['gat', 'AK', 'uzi', 'piece', 'mac 11', 'tech', 'glock', 'beretta', 'forty-five', 'thirty-eight', 'nine'],
         "violence": ['rape', 'suicide', 'strangle']
     }}
 
@@ -281,7 +281,7 @@ def llm_process_line(text_to_analyze):
     
     # For prompting the language model
     messages = [
-        #{"role": "system", "content": "You are a helpful assistant that only returns valid JSON."},
+        #{"role": "system", "content": "You are a helpful assistant that only returns valid JSON."}, # not needed for Gemma
         {"role": "user", "content": prompt_content},
     ]
 
@@ -355,7 +355,7 @@ def process_transcription(transcription_result):
             end_time = float(word_info['end'])
 
             # Filter out hallucinations with very low word length. 
-            # 50ms is a generous lower bound for minimum possible word length
+            # 100ms is a generous lower bound for minimum possible word length
             if end_time - start_time < .1: continue 
 
             word_id = (i,j)
@@ -373,7 +373,7 @@ def process_transcription(transcription_result):
         full_transcript.append({'line_words': segment_words, 'line_text': line_text, 'start': segment['start'], 'end': segment['end']})
 
     total_song_words = 0
-    line_OK = []
+    line_errs = []
 
     for i, line_to_analyze in enumerate(full_transcript):
 
@@ -387,8 +387,12 @@ def process_transcription(transcription_result):
 
         llm_output = parse_llm_json_output(response_text)
 
+        if not llm_output:
+            print(f'Error with LLM output at line {i+1}, trying again')
+            response_text = llm_process_line(line_to_analyze['line_text'])
+            llm_output = parse_llm_json_output(response_text)
+
         if llm_output:
-            line_OK.append(True)
             print(f'Line {i+1} OK')
             explicit_phrases = llm_output.get('explicit_words_found', [])
             for d in explicit_phrases:
@@ -405,32 +409,10 @@ def process_transcription(transcription_result):
                         #print(f"Content identified: {d["phrase"]} (reason: {cat})")
                         break
 
-            
-        
         else: 
             print(f'-- Problem with LLM output at line {i+1}')
-            line_OK.append(False)
-        # try:
-        #     # Here we use the LLM for edge case detection. Formatting can be an issue
-        #     llm_output = json.loads(response_text)
-        #     print(f'Line {i+1} OK') 
+            line_errs.append(i)
 
-        #     explicit_phrases = llm_output.get('explicit_words_found', [])
-        #     for entry in explicit_phrases:
-        #         try: phrase_tokens = entry.get('phrase', []).split()
-        #         except: continue
-
-        #         n = len(phrase_tokens)
-                
-        #         for j in range(len(text_tokens) - n + 1):
-        #             if [token.lower() for token in text_tokens[j:j+n]] == [p_token.lower() for p_token in phrase_tokens]:
-        #                 explicit_ids = explicit_ids | set([k for k in range(j, j+n)])
-        #                 break
-
-        # except (json.JSONDecodeError, KeyError) as e:
-        #     print(f'- Error with LLM output on line {i+1}')
-
-        
         explicit_ids = sorted(list(explicit_ids))
         ids_to_mute.extend([(i,j) for j in explicit_ids])
 
@@ -440,7 +422,7 @@ def process_transcription(transcription_result):
         "transcript": full_transcript,
         "initial_explicit_ids": ids_to_mute,
         "filthiness": filth,
-        "line_OK": line_OK
+        "line_errs": line_errs
     }
 
 
@@ -520,33 +502,54 @@ def format_metadata_header(filename, metadata, explicit_word_count):
         
     return f"### Details for: *{filename}*\n**Artist:** {artist} | **Song:** {title} | **Album:** {album} ({year}) {genius_link} {wer_display}{status_message}"
 
-def generate_static_transcript(transcript_data, initial_ids, line_OK):
+def generate_static_transcript(transcript_data, initial_ids, line_errs):
     ids_to_mute = set(initial_ids)
-    table_header = "<table><thead><tr><th style='width: 125px;'>Time</th><th>Line transcript</th><th>LLM error</th></thead><tbody>"
-    table_rows = []
+    
+    # Format table without error column if no LLM transcription errors
+    if line_errs == []:
+        table_header = "<table><thead><tr><th style='width: 125px;'>Time</th><th>Line transcript</th></thead><tbody>"
+        table_rows = []
 
-    for i, segment in enumerate(transcript_data):
-        start_time_str, end_time_str = seconds_to_minutes(segment.get('start')), seconds_to_minutes(segment.get('end'))
-        
-        words_in_line = segment.get('line_words', [])
-        formatted_words = []
+        for i, segment in enumerate(transcript_data):
+            start_time_str, end_time_str = seconds_to_minutes(segment.get('start')), seconds_to_minutes(segment.get('end'))
+            
+            words_in_line = segment.get('line_words', [])
+            formatted_words = []
 
-        for word in words_in_line:
-            word_id = word.get('id')
+            for word in words_in_line:
+                word_id = word.get('id')
 
-            if word_id in ids_to_mute:
-                formatted_words.append(f"<s>{html.escape(word['text'])}</s>")
+                if word_id in ids_to_mute: formatted_words.append(f"<s>{html.escape(word['text'])}</s>")
+                else: formatted_words.append(html.escape(word["text"]))
 
-            else:
-                formatted_words.append(html.escape(word["text"]))
+            formatted_line = " ".join(formatted_words)
 
-        formatted_line = " ".join(formatted_words)
+            table_rows.append(f"<tr><td>{start_time_str} - {end_time_str}</td><td>{formatted_line}</td></tr>")
+            
+    # If there are line errors, display them!
+    else:
+        table_header = "<table><thead><tr><th style='width: 125px;'>Time</th><th>Line transcript</th><th>LLM error</th></thead><tbody>"
+        table_rows = []
 
-        if line_OK[i]: LLM_marker = ''
-        else: LLM_marker = '⚠️'
+        for i, segment in enumerate(transcript_data):
+            start_time_str, end_time_str = seconds_to_minutes(segment.get('start')), seconds_to_minutes(segment.get('end'))
+            
+            words_in_line = segment.get('line_words', [])
+            formatted_words = []
 
-        table_rows.append(f"<tr><td>{start_time_str} - {end_time_str}</td><td>{formatted_line}</td><td>{LLM_marker}</td></tr>")
-        
+            for word in words_in_line:
+                word_id = word.get('id')
+
+                if word_id in ids_to_mute: formatted_words.append(f"<s>{html.escape(word['text'])}</s>")
+                else: formatted_words.append(html.escape(word["text"]))
+
+            formatted_line = " ".join(formatted_words)
+
+            if i in line_errs: LLM_marker = '⚠️'
+            else: LLM_marker = ''
+
+            table_rows.append(f"<tr><td>{start_time_str} - {end_time_str}</td><td>{formatted_line}</td><td>{LLM_marker}</td></tr>")
+            
     return table_header + "".join(table_rows) + "</tbody></table>"
 
 # Execute the whisper model for transcription
@@ -565,6 +568,7 @@ def handle_batch_analysis(files, progress=gr.Progress()):
     num_files = len(files)
     for i, audio_file in enumerate(files):
         progress((i + 1) / num_files, desc=f"Analyzing File {i + 1} of {num_files}")
+        print(f"\n---Analyzing File {i + 1} of {num_files}---")
         filename = os.path.basename(audio_file.name)
         
         # MODIFIED: Restructured analysis flow
@@ -575,7 +579,7 @@ def handle_batch_analysis(files, progress=gr.Progress()):
         processed_data = process_transcription(analysis_state['transcription_result'])
         analysis_state['transcript'] = processed_data['transcript']
         analysis_state['initial_explicit_ids'] = processed_data['initial_explicit_ids']
-        analysis_state['line_OK'] = processed_data['line_OK']
+        analysis_state['line_errs'] = processed_data['line_errs']
         filth = processed_data['filthiness']
 
         # Step 3: Calculate WER score now that we have the processed transcript
@@ -592,7 +596,7 @@ def handle_batch_analysis(files, progress=gr.Progress()):
     first_file_results = all_results[file_list[0]]
     explicit_count_first_file = len(first_file_results['initial_explicit_ids'])
     header = format_metadata_header(file_list[0], first_file_results['metadata'], explicit_count_first_file)
-    transcript_html = generate_static_transcript(first_file_results['transcript'], first_file_results['initial_explicit_ids'], first_file_results['line_OK'])
+    transcript_html = generate_static_transcript(first_file_results['transcript'], first_file_results['initial_explicit_ids'], first_file_results['line_errs'])
     
     any_explicit_content = any(len(res['initial_explicit_ids']) > 0 for res in all_results.values())
     if any_explicit_content:
@@ -619,7 +623,7 @@ def update_details_view(selected_filename, all_results):
     file_results = all_results[selected_filename]
     explicit_word_count = len(file_results['initial_explicit_ids'])
     header = format_metadata_header(selected_filename, file_results['metadata'], explicit_word_count)
-    transcript_html = generate_static_transcript(file_results['transcript'], file_results['initial_explicit_ids'], file_results['line_OK'])
+    transcript_html = generate_static_transcript(file_results['transcript'], file_results['initial_explicit_ids'], file_results['line_errs'])
     return header, transcript_html
 
 # Apply the edits to all songs
@@ -724,8 +728,8 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
             gr.Markdown("""
                         **Important** Language models are not deterministic and can fail in various ways. 
                             
-                        - If you find that a portion of the lyrics has not been transcribed correctly/at all, please consider running the tool again on that song
-                        - If the symbol "⚠️" in the rightmost column of a row, this means that the edge case detection for that row was unreadable. This could lead to explicit content failing to be detected and therefore not censored
+                        - If you find that a portion of the lyrics has not been transcribed correctly/at all, please consider running the tool again on that song.
+                        - If you see a column titled "LLM Error", then any rows containing the symbol "⚠️" were unable to be processed by the language model for edge-case explicit content. "Always explicit" content will still be censored, but this row may be missing censoring tags on additional edge-case content.
 
                         Always check your edited files against an official source to make sure all of the desired explicit content has been detected and censored.    
                         """)
