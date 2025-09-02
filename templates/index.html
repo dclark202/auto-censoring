@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FSP Finder - Upload</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}">
+    
+    <link rel="stylesheet" href="https://unpkg.com/sakura.css/css/sakura.css" type="text/css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>FSP Finder</h1> 
+    <h6>AI-powered Foul Speech Pattern detector and automatic music censoring tool</h6>
+
+    <hr>
+
+    <h4>How to use this tool</h4> 
+    <ul>
+      <li>Upload one or more audio files using the box below. Most common audio formats are accepted (e.g., .mp3, .wav, etc.)</li>
+      <li>Click the <b>Process audio</b> button to create the transcriptions of the uploaded track(s). You will have a chance to review the edits before applying the censoring.</li>
+    </ul>
+    
+   <form action="/analyze" method="post" enctype="multipart/form-data" class="upload-form">
+      
+      <p>Drag & drop your audio files here or click to browse.</p>
+      
+      <input type="file" name="file" id="file-input" required multiple hidden>
+      
+      <label for="file-input" class="btn-browse">Browse Files</label>
+
+      <div id="file-list-display">
+          <p style="color: #585858">No files uploaded yet</p>
+      </div>
+
+      <br>
+      <button type="submit" class="process-button">Process audio</button>
+    </form>
+    
+      <h4>How it works</h4> 
+      <p>This app uses a fine-tuned version of OpenAI's automatic speech recognition model <a href="https://github.com/openai/whisper">Whisper</a> to create lyrics transcripts of the uploaded music files. Explicit words and phrases are as follows.</p>
+      <ul>
+        <li>Always explicit content (e.g., profanity, slurs) is immediately censored.</li>
+        <li>A language model (<a href="https://huggingface.co/google/gemma-2-9b-it">Google Gemma 2</a>) then detects edge cases (e.g., drug references, sexually inappropriate content).</li>
+      </ul>
+      <p>Explicit content is highlighted in <s>red strikethrough</s> text in the full transcript. The vocals stem of the track is split off from the song using <a href="https://github.com/facebookresearch/demucs">demucs</a> and muted at the appropriate times. The result is a high quality edited track, ready for air play.</p>
+
+    <div id="loading-overlay" class="hidden">
+        <div class="loading-box">
+            <h2 id="loading-text">Processing...</h2>
+            <p>This may take several minutes depending on song length and number of tracks being processed</p>
+        </div>
+    </div>
+
+    <footer>
+        <hr>
+        <p>
+            &copy; 2025 FSP Finder | <a href="https://github.com/dclark202/auto-censoring">View Project on GitHub</a>
+        </p>
+    </footer>
+
+    <script>
+      document.addEventListener('DOMContentLoaded', () => {
+          const uploadForm = document.querySelector('.upload-form');
+          const fileInput = document.getElementById('file-input');
+          const fileListDisplay = document.getElementById('file-list-display');
+          const loadingOverlay = document.getElementById('loading-overlay');
+
+          function updateFileList() {
+              fileListDisplay.innerHTML = '';
+              if (fileInput.files.length === 0) {
+                  fileListDisplay.innerHTML = '<p>No files selected.</p>';
+                  return;
+              }
+              const list = document.createElement('ul');
+              for (const file of fileInput.files) {
+                  const listItem = document.createElement('li');
+                  listItem.textContent = file.name;
+                  list.appendChild(listItem);
+              }
+              fileListDisplay.appendChild(list);
+          }
+
+          uploadForm.addEventListener('dragover', (event) => {
+              event.preventDefault();
+              uploadForm.classList.add('drag-over');
+          });
+
+          uploadForm.addEventListener('dragleave', () => {
+              uploadForm.classList.remove('drag-over');
+          });
+
+          uploadForm.addEventListener('drop', (event) => {
+              event.preventDefault();
+              uploadForm.classList.remove('drag-over');
+              fileInput.files = event.dataTransfer.files;
+              updateFileList();
+          });
+
+          fileInput.addEventListener('change', updateFileList);
+
+          // This now only shows the overlay on submit.
+          uploadForm.addEventListener('submit', () => {
+              loadingOverlay.classList.remove('hidden');
+          });
+      });
+    </script>
+</body>
+</html>

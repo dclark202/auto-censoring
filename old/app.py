@@ -1,69 +1,78 @@
 import gradio as gr
 import os, re, html, json, shutil, tempfile
 import torch
+import whisper
 import whisper_timestamped as whisper_t
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, pipeline
-from transformers import WhisperForConditionalGeneration
-from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+import transformers
+from transformers import AutoTokenizer, WhisperForConditionalGeneration, AutoModelForCausalLM, BitsAndBytesConfig
 from peft import PeftModel
 from datetime import datetime
-import whisper
 import demucs.separate
 from pydub import AudioSegment
 from mutagen.easyid3 import EasyID3
 import lyricsgenius
 import jiwer
 
+# Hide many error messages
+transformers.logging.set_verbosity_error()
 
 ###### Ideas ########
-# - Javascript for toggling individual words to mute --> playright
-# - Use LLM to determine what is "explicit" in the ouputs --> structured output?
+# - Javascript for toggling individual words to mute --> playright IN PROGRESS
+# - Use LLM to determine what is "explicit" in the ouputs --> structured output? IN PROGRESS
 # - Mute explicit nonvocal sounds: e.g., gun shots, sex scenes, etc.
-# - Additional words to censor at the beginning screen ?
-# - History
+# - History?
 
 
-## Get a genius API key at https://genius.com/api-clients
-## put your key in system environment at GENIUS_API_TOKEN or set it manually here
+## Requirements: 
+# 1. Genius API key (https://genius.com/api-clients)
+# Put your key in system environment at GENIUS_API_TOKEN or set it manually here
+
+# 2. Hugging Face API key with access to meta-llama/Meta-Llama-3-8B-Instruct
+
+###############################################################################################
+
 GENIUS_API_TOKEN = os.getenv("GENIUS_API_TOKEN") 
 genius = lyricsgenius.Genius(GENIUS_API_TOKEN, verbose=False, remove_section_headers=True)
-
 
 # Print the start time
 print(f"Executing {os.path.basename(__file__)} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-## 1. Load the Llama Model for edge case detection
-llama_model_id = "meta-llama/Meta-Llama-3-8B-Instruct"
+## Load the Llama Model for edge case detection
+llm_model_id = "google/gemma-2-9b-it"
 
-# This is the magic that lets you run the model in <10GB VRAM
 quantization_config = BitsAndBytesConfig(
     load_in_4bit=True,
     bnb_4bit_compute_dtype=torch.bfloat16
 )
 
-print(f"Loading {llama_model_id}...")
-llama_tokenizer = AutoTokenizer.from_pretrained(llama_model_id)
-llama_model = AutoModelForCausalLM.from_pretrained(
-    llama_model_id,
+print(f"Loading {llm_model_id}...")
+llm_tokenizer = AutoTokenizer.from_pretrained(llm_model_id)
+llm_model = AutoModelForCausalLM.from_pretrained(
+    llm_model_id,
     quantization_config=quantization_config,
-    device_map="auto",  # Automatically maps the model to your GPU
+    device_map="auto", 
 )
+
+gemma_template = (
+    "{% for message in messages %}"
+        "{% if message['role'] == 'user' %}"
+            "{{ '<start_of_turn>user\n' + message['content'] + '<end_of_turn>\n' }}"
+        "{% elif message['role'] == 'model' %}"
+            "{{ '<start_of_turn>model\n' + message['content'] + '<end_of_turn>\n' }}"
+        "{% endif %}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}"
+        "{{ '<start_of_turn>model\n' }}"
+    "{% endif %}"
+)
+
+# Set the template on the tokenizer object
+llm_tokenizer.chat_template = gemma_template
+
 print('Done.')
 
-################ Load models
-
-## 1. Toxicity filter. Using the base version 
-# print('Loading toxicity classifier...')
-# tox_model = "cardiffnlp/twitter-roberta-large-sensitive-multilabel"
-# tox_tokenizer = AutoTokenizer.from_pretrained(tox_model)
-# tox_model = AutoModelForSequenceClassification.from_pretrained(tox_model)
-# tox_model.to(device)
-# tox_pipe = pipeline("text-classification", model=tox_model, tokenizer=tox_tokenizer, device=device, top_k=2)
-
-
-
-## 2. Create our Whisper model from the LoRA weights
+## Create our Whisper model from the LoRA weights
 ## Whisper_timestamped requires the entire model to be saved, this saves static storage space by only saving the lora config
 def load_whisper_model(model_path, lora_config, base_model_name="openai/whisper-medium.en"):
     # If the model exists already we're good to go
@@ -82,43 +91,33 @@ def load_whisper_model(model_path, lora_config, base_model_name="openai/whisper-
     print(f'Whisper model from {lora_config} saved at {model_path}')
     return
 
-# Where fsp.py expects to find our fine-tuned model
+# Where we exoect to find the fine-tuned model
 model_path = 'whisper-medium-ft'
 lora_config = './lora_config'
 
 load_whisper_model(model_path=model_path, lora_config=lora_config)
 
-###### Helper functions #######
+# Predefined always explicit words
 
 #############################################################################
 ### just a heads up there's a bunch of curse words and racial slurs below ###
 #############################################################################
 
+# If a word contains any of these as a substring it will *always* be muted
+always_bad = {'fuck', 'shit', 'cunt', 'bitch', 'pussy', 'nigg', 'goddam', 'faggot', 'asshole', 'whore', 'dick', 'clit'}
 
-# List of words to search for to be muted:
-# The way this works currently is that we look for these words as **substrings** of each transcribed word
-# this means that 'fuck' handles all versions 'fucking', 'motherfucker', 'fucked', etc.
-# This method is a bit crude as it can lead to some false positive, ex. 'Dickens' would be censored.
-# Consider using an LLM on the output for classification?  
+## For backup
 default_curse_words = {
     'fuck', 'shit', 'piss', 'bitch', 'nigg', 'dyke', 'cock', 'faggot', 
     'cunt', 'tits', 'pussy', 'dick', 'asshole', 'whore', 'goddam',
-    'douche', 'chink', 'tranny', 'slut', 'jizz', 'kike', 'gook'
+    'douche', 'chink', 'tranny', 'slut', 'jizz', 'kike', 'gook', 'cocksucker'
 }
 
-# Words for which the substring method will absolutely not work
 singular_curse_words = {
-    'fag', 'fags', 'faggy', 'cum', 'hell', 'spic', 'spics', 'clit', 
-    'clits', 'wank', 'ass', 'asses', 'asswipe', 'asswipes', 'asscrack',
-    'asscracks', 'wanks', 'cums', 'tit', 
+    'fag', 'cum', 'hell', 'spic', 'clit', 'wank', 'ass', 'ho', 'hoes'
 }
 
-always_bad = {'fuck', 'shit', 'cunt', 'bitch', 'pussy', 'nigg', 'goddam', 'faggot', 'asshole'}
-
-
-######################################################
-# Helper functions required for the gradio interface #
-######################################################
+## Helper functions for the Gradio UI
 
 # Removes all punctuation and returns lower case only words
 def remove_punctuation(s):
@@ -201,10 +200,10 @@ def get_genius_lyrics(artist, song_title):
         return song.lyrics if song else "Could not find lyrics on Genius."
     except Exception: return "An error occurred while searching for lyrics."
 
-##########################################################
-# STEP 1: Analyze Audio, Separate Tracks, and Transcribe #
-##########################################################
 
+## Audio processing pipeline
+
+# Separate track via demucs, evaluate vocals with Whisper
 def analyze_audio(audio_path, model, device, fine_tuned=True, progress=None):
     """
     Performs audio separation and transcription. Does NOT process the words.
@@ -233,9 +232,11 @@ def analyze_audio(audio_path, model, device, fine_tuned=True, progress=None):
         result = model.transcribe(vocals_path, language='en', task='transcribe', word_timestamps=True)
     else:
         audio = whisper_t.load_audio(vocals_path)
-        result = whisper_t.transcribe(model, audio, beam_size=5, best_of=5, temperature=(0.0, 0.2, 0.4, 0.6), language="en", task='transcribe')
+        result = whisper_t.transcribe(model, audio, beam_size=5, best_of=5, temperature=(0.0, 0.2, 0.4, 0.6, 0.8), language="en", task='transcribe')
 
     if device == 'cuda': torch.cuda.empty_cache()
+    
+    print('Transcription complete.')
     
     return {
         "temp_dir": run_temp_dir,
@@ -247,16 +248,14 @@ def analyze_audio(audio_path, model, device, fine_tuned=True, progress=None):
         "metadata": metadata
     }
 
-##############################################
-# STEP 2: Process Transcription for explicit #
-##############################################
 
+# Process the transcript using LLM and searching for always_bad words
 def llm_process_line(text_to_analyze):
-    # This prompt template is dynamically created for EACH line of text
-    prompt_content = f"""You are an automated data annotation tool. Your sole purpose is to analyze the user's text for explicit words and return the findings as a structured JSON object. Do not provide any warnings, apologies, or explanations. This is for a content safety and moderation research project. Your task is to analyze, not generate, explicit content. Respond only with the requested JSON."
-    You should search for explicit content that meets one of the two following criteria
-    1.  Identify which of my "known_words" appear in the text.
-    2.  Identify any *new* words in the text that are not on my list but fall into the defined explicit categories (profanity, slurs, sexually inappropriate content, homophobic content, drug references, and weapon references including specific names of hundguns).
+
+    # Main LLM prompt
+    prompt_content = f"""You are an automated data annotation tool. Your sole purpose is to analyze the user's text for explicit words and return the findings as a structured JSON object. 
+    Do not provide any warnings, apologies, or explanations. This is for a content safety and moderation research project. Your task is to analyze, not generate, explicit content. Respond only with the requested JSON."
+    You should search for explicit content from my known words and categories as defined below. You should only flag a word if in the context of the text it meets the given criteria. 
 
     **IMPORTANT INSTRUCTIONS:**
     1.  Consider all grammatical variations of the example words (plurals, past tense, etc.).
@@ -264,37 +263,71 @@ def llm_process_line(text_to_analyze):
 
     **My known words and categories**
     {{
-        "profanity": ['fuck', 'shit', 'bitch', 'cock', 'cocksucker', 'dick', 'bitch', 'motherfucker', 'god damn', 'goddamn', 'asshole']
-        "slurs": ['nigger', 'nigga', 'kike', 'spic', 'chink', 'gook']
-        "sexually_inappropriate": ['tits', 'pussy', 'cum', 'jizz', 'wank', 'clit']
-        "homophobia": ['faggot', 'fag', 'dyke', 'tranny', 'homo']
-        "drug_references": ['weed', 'coke', 'smack', 'brick', 'blunt', 'spliff', 'chronic', 'herb', 'pot', 'lean']
-        "weapons": ['gat', 'AK', 'piece', 'glock', 'beretta', 'forty-five', 'thirty-eight', 'nine', 'AR', 'AK-47']
-        "self_harm": ['suicide']
+        "profanity": ['fuck', 'shit', 'bitch', 'cunt'],
+        "drug_references": ['weed', 'coke', 'brick', 'blunt', 'rock', 'swisha', 'spliff', 'chronic', 'lean'],
+        "firearms": ['gat', 'AK', 'uzi', 'piece', 'mac 11', 'tech', 'glock', 'beretta', 'forty-five', 'thirty-eight', 'nine'],
+        "violence": ['rape', 'suicide', 'strangle']
     }}
 
     **Text to Analyze:**
     "{text_to_analyze}"
 
-    Return a single JSON object with one key: "explicit_words_found". The value should be a list of all the explicit words you identified in the text. Provide only the raw JSON object as your final response.
+    Return a single JSON object with one key: "explicit_words_found". Each value should contain the two following keys:
+    "phrase": the phrase identified to be explicit
+    "reason": which category the phrase falls into from the categories listed above
+    
+    Provide only the raw JSON object as your final response.
     """
-
+    
+    # For prompting the language model
     messages = [
-        {"role": "system", "content": "You are a helpful assistant that only returns valid JSON."},
+        #{"role": "system", "content": "You are a helpful assistant that only returns valid JSON."}, # not needed for Gemma
         {"role": "user", "content": prompt_content},
     ]
 
-    input_ids = llama_tokenizer.apply_chat_template(messages, add_generation_prompt=True, return_tensors="pt").to(llama_model.device)
+    chat_string = llm_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = llm_tokenizer(chat_string, return_tensors="pt").to(llm_model.device)
 
-    outputs = llama_model.generate(input_ids, max_new_tokens=128, pad_token_id=llama_tokenizer.eos_token_id)
-    response_text = llama_tokenizer.decode(outputs[0][input_ids.shape[-1]:], skip_special_tokens=True)
+    outputs = llm_model.generate(**inputs, max_new_tokens=128, pad_token_id=llm_tokenizer.eos_token_id)
+    response_text = llm_tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:], skip_special_tokens=True)
 
     return response_text 
 
-## Merge fsp and app into one .py file
-## Make sure process_transcription works correctly and sends ids in the correct format 
-### e.g., (i, j) can replace word_i_j
 
+def parse_llm_json_output(response_text):
+    """
+    Cleans and parses a JSON string from a language model's response.
+    
+    Args:
+        response_text (str): The raw text output from the language model.
+        
+    Returns:
+        dict: A parsed Python dictionary.
+        None: If parsing fails after cleaning attempts.
+    """
+    # 1. Look for a JSON object within markdown fences (e.g., ```json ... ```)
+    match = re.search(r"```(json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
+    if match:
+        # If found, extract the content between the braces
+        json_str = match.group(2)
+    else:
+        # If no markdown, find the first '{' and the last '}'
+        start_index = response_text.find('{')
+        end_index = response_text.rfind('}')
+        if start_index != -1 and end_index != -1 and start_index < end_index:
+            json_str = response_text[start_index:end_index+1]
+        else:
+            # If no JSON structure is found at all
+            print("Error: Could not find a JSON object in the response.")
+            return None
+    
+    # 2. Try to parse the extracted string
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON after cleaning: {e}")
+        # print(f"Problematic string: {json_str}")
+        return None
 
 def process_transcription(transcription_result):
     """
@@ -303,8 +336,14 @@ def process_transcription(transcription_result):
     """
     full_transcript = []
     ids_to_mute = []
+    raw_transcript = transcription_result.get("segments", [])
+    total_lines_number = len(raw_transcript)
 
-    for i, segment in enumerate(transcription_result.get("segments", [])):
+    print(f'Processing transcript... {total_lines_number} total lines detected')
+    print('Checking for proper formatting of LLM output:')
+
+    i = 0
+    for segment in raw_transcript:
         segment_words = []
         
         j = 0
@@ -317,113 +356,104 @@ def process_transcription(transcription_result):
 
             # Filter out hallucinations with very low word length. 
             # 100ms is a generous lower bound for minimum possible word length
-            if end_time - start_time < .1: 
-                continue 
+            if end_time - start_time < .1: continue 
 
-            word_id = f"word_{i}_{j}"
+            word_id = (i,j)
 
             word_data = {'id': word_id, 'text': word_text, 'start': start_time, 'end': end_time}
             segment_words.append(word_data)
 
             j += 1
 
-        line_text = ' '.join([d['text'] for d in segment_words])
+        if segment_words == []: continue
 
+        i += 1
+
+        line_text = ' '.join([d['text'] for d in segment_words])
         full_transcript.append({'line_words': segment_words, 'line_text': line_text, 'start': segment['start'], 'end': segment['end']})
 
+    total_song_words = 0
+    line_errs = []
+
     for i, line_to_analyze in enumerate(full_transcript):
-        print(f'--- Line {i} ---')
+
         response_text = llm_process_line(line_to_analyze['line_text'])
-        text_tokens = [d['text'].strip() for d in line_to_analyze['line_words']]
+        text_tokens = [d['text'].strip().lower() for d in line_to_analyze['line_words']]
         total_song_words += len(text_tokens)
 
         # Store the word_ids of the explicit content
-        explicit_ids = set()
+        
+        explicit_ids = backup_censoring(text_tokens)
 
-        try: 
-            llm_output = json.loads(response_text)
+        llm_output = parse_llm_json_output(response_text)
 
+        if not llm_output:
+            print(f'Error with LLM output at line {i+1}, trying again')
+            response_text = llm_process_line(line_to_analyze['line_text'])
+            llm_output = parse_llm_json_output(response_text)
+
+        if llm_output:
+            print(f'Line {i+1} OK')
             explicit_phrases = llm_output.get('explicit_words_found', [])
-            for phrase in explicit_phrases:
-                phrase_tokens = phrase.split()
+            for d in explicit_phrases:
+                try: phrase_tokens = d["phrase"].split()
+                except: continue
+
+                cat = d["reason"]
+
                 n = len(phrase_tokens)
                 
                 for j in range(len(text_tokens) - n + 1):
                     if [token.lower() for token in text_tokens[j:j+n]] == [p_token.lower() for p_token in phrase_tokens]:
                         explicit_ids = explicit_ids | set([k for k in range(j, j+n)])
+                        #print(f"Content identified: {d["phrase"]} (reason: {cat})")
                         break
 
-        except (json.JSONDecodeError, KeyError) as e:
-            print('(!) Error with LLM output')
+        else: 
+            print(f'-- Problem with LLM output at line {i+1}')
+            line_errs.append(i)
 
-        # print('Text:', line_to_analyze['line_text'])
-        # print('LLM output:', llm_output)
-
-        # Grab any of the always bad ones not captured by the LLM
-        for j, token in enumerate(text_tokens):
-            if any(w in token for w in always_bad):
-                explicit_ids.add(j)
-        
         explicit_ids = sorted(list(explicit_ids))
-        #print('Words to mute and indices:', [(line_to_analyze['line_words'][j]['text'], j) for j in explicit_ids])
         ids_to_mute.extend([(i,j) for j in explicit_ids])
 
-    # # Handles different dictionary keys from whisper vs whisper_timestamped
-    # word_key = 'text' if 'text' in transcription_result.get('segments', [{}])[0].get('words', [{}])[0] else 'word'
-    # prob_key = 'confidence' if 'confidence' in transcription_result.get('segments', [{}])[0].get('words', [{}])[0] else 'probability'
-    
-    # prev_word = ''
-    # prev_word_id = None
-
-    # for i, segment in enumerate(transcription_result.get("segments", [])):
-    #     segment_words = []
-        
-    #     j = 0
-    #     for word_info in segment.get('words', []):
-    #         word_text = word_info.get(word_key, '').strip()
-    #         if not word_text: continue
-            
-    #         cleaned_word = remove_punctuation(word_text)
-    #         is_explicit = any(curse in cleaned_word for curse in default_curse_words)
-            
-    #         start_time = float(word_info['start'])
-    #         end_time = float(word_info['end'])
-
-    #         # Filter out hallucinations with very low word length. 
-    #         # 100ms is a generous lower bound for minimum possible word length
-    #         if end_time - start_time < .1: 
-    #             continue 
-
-    #         word_id = f"word_{i}_{j}"
-            
-    #         word_data = {'id': word_id, 'text': word_text, 'start': start_time, 'end': end_time, 'prob': word_info.get(prob_key, 0.0)}
-    #         segment_words.append(word_data)
-
-    #         if cleaned_word in singular_curse_words:
-    #             initial_explicit_ids.append(word_id)
-
-    #         elif ('dam' in cleaned_word and 'god' in prev_word) or ('fuck' in cleaned_word and 'mother' in prev_word) or (cleaned_word == 'off' and 'jerk' in prev_word):
-    #             if prev_word_id: initial_explicit_ids.append(prev_word_id)
-    #             initial_explicit_ids.append(word_id)
-
-    #         elif is_explicit:
-    #             initial_explicit_ids.append(word_id)
-
-    #         prev_word = cleaned_word
-    #         prev_word_id = word_id
-    #         j += 1
-            
-    #     full_transcript.append({'line_words': segment_words, 'start': segment['start'], 'end': segment['end']})
+    filth = len(ids_to_mute)/total_song_words
 
     return {
         "transcript": full_transcript,
-        "initial_explicit_ids": ids_to_mute
+        "initial_explicit_ids": ids_to_mute,
+        "filthiness": filth,
+        "line_errs": line_errs
     }
 
 
-##############################################
-# STEP 3: Apply Censoring and Finalize Audio #
-##############################################
+def backup_censoring(text_tokens):
+    backup_explicit_ids = set()
+    prev_word = ''
+
+    for j, word in enumerate(text_tokens):
+        
+        cleaned_word = remove_punctuation(word)
+        
+        is_explicit = any(curse in cleaned_word for curse in default_curse_words)
+
+        # Short words that can be substrings of nonsensitive words
+        if cleaned_word in singular_curse_words:
+            backup_explicit_ids.add(j)
+
+        # Handle two word cluster "god dam*", "mother fuck*". 
+        # Other ones: jerk off, cock sucker, ... ?
+        elif ('dam' in cleaned_word and prev_word == 'god') or ('fuck' in cleaned_word and prev_word == 'mother') or (cleaned_word == 'off' and prev_word == 'jerk'):
+            backup_explicit_ids = backup_explicit_ids | {j-1, j}
+
+        # The majority of censored words will come from here
+        elif is_explicit:
+            backup_explicit_ids.add(j)
+
+        prev_word = cleaned_word
+        
+    return backup_explicit_ids
+
+# Apply the audio censoring 
 
 def apply_censoring(analysis_state, ids_to_censor, progress=None):
     """
@@ -437,6 +467,7 @@ def apply_censoring(analysis_state, ids_to_censor, progress=None):
 
     # Translate word IDs to timestamps
     ids_set = set(ids_to_censor)
+
     times_to_censor = []
     transcript = analysis_state.get('transcript', [])
     for segment in transcript:
@@ -456,7 +487,7 @@ def apply_censoring(analysis_state, ids_to_censor, progress=None):
 
     return output_path
 
-
+## Additional functions for Gradio interface
 
 # Metadata display for the full transcriptions. Includes genius link if possible
 def format_metadata_header(filename, metadata, explicit_word_count):
@@ -471,58 +502,54 @@ def format_metadata_header(filename, metadata, explicit_word_count):
         
     return f"### Details for: *{filename}*\n**Artist:** {artist} | **Song:** {title} | **Album:** {album} ({year}) {genius_link} {wer_display}{status_message}"
 
-def generate_static_transcript(transcript_data, initial_ids):
+def generate_static_transcript(transcript_data, initial_ids, line_errs):
     ids_to_mute = set(initial_ids)
-    table_header = "<table><thead><tr><th style='width: 125px;'>Time</th><th>Line transcript</th></thead><tbody>"
-    table_rows = []
+    
+    # Format table without error column if no LLM transcription errors
+    if line_errs == []:
+        table_header = "<table><thead><tr><th style='width: 125px;'>Time</th><th>Line transcript</th></thead><tbody>"
+        table_rows = []
 
-    # all_lines = [" ".join([word['text'] for word in segment.get('line_words', [])]) for segment in transcript_data]
+        for i, segment in enumerate(transcript_data):
+            start_time_str, end_time_str = seconds_to_minutes(segment.get('start')), seconds_to_minutes(segment.get('end'))
+            
+            words_in_line = segment.get('line_words', [])
+            formatted_words = []
 
-    # explicit_results = []
-    # if all_lines:
-    #     pipeline_outputs = tox_pipe(all_lines)
-        
-    #     for line_result in pipeline_outputs:
-    #         flags = []
+            for word in words_in_line:
+                word_id = word.get('id')
 
-    #         for d in line_result:
-    #             label = d['label']
-    #             score = d['score']
+                if word_id in ids_to_mute: formatted_words.append(f"<s>{html.escape(word['text'])}</s>")
+                else: formatted_words.append(html.escape(word["text"]))
 
-    #             if score < 0.3: continue
-    #             elif label == 'confilctual' or label == 'selfharm': flags.append('violence')
-    #             elif label == 'profanity': flags.append('curse')
-    #             elif label == 'drugs': flags.append('drugs')
-    #             elif label == 'sex': flags.append('sex')
+            formatted_line = " ".join(formatted_words)
 
-    #         explicit_results.append(flags)  
+            table_rows.append(f"<tr><td>{start_time_str} - {end_time_str}</td><td>{formatted_line}</td></tr>")
+            
+    # If there are line errors, display them!
+    else:
+        table_header = "<table><thead><tr><th style='width: 125px;'>Time</th><th>Line transcript</th><th>LLM error</th></thead><tbody>"
+        table_rows = []
 
-    for i, segment in enumerate(transcript_data):
-        start_time_str, end_time_str = seconds_to_minutes(segment.get('start')), seconds_to_minutes(segment.get('end'))
-        
-        # explicit_flag = ""
-        # if explicit_results:
-        #     for flags in explicit_results[i]:
-        #         if 'violence' in flags: explicit_flag += '💥'
-        #         if 'curse' in flags: explicit_flag += '🤬'
-        #         if 'drugs' in flags: explicit_flag += '🚬'
-        #         if 'sex' in flags: explicit_flag += '🔞'
-        
-        words_in_line = segment.get('line_words', [])
-        formatted_words = []
+        for i, segment in enumerate(transcript_data):
+            start_time_str, end_time_str = seconds_to_minutes(segment.get('start')), seconds_to_minutes(segment.get('end'))
+            
+            words_in_line = segment.get('line_words', [])
+            formatted_words = []
 
-        for word in words_in_line:
-            word_id = word.get('id')
+            for word in words_in_line:
+                word_id = word.get('id')
 
-            if word_id in ids_to_mute:
-                formatted_words.append(f"<s>{html.escape(word['text'])}</s>")
+                if word_id in ids_to_mute: formatted_words.append(f"<s>{html.escape(word['text'])}</s>")
+                else: formatted_words.append(html.escape(word["text"]))
 
-            else:
-                formatted_words.append(html.escape(word["text"]))
+            formatted_line = " ".join(formatted_words)
 
-        formatted_line = " ".join(formatted_words)
-        table_rows.append(f"<tr><td>{start_time_str} - {end_time_str}</td><td>{formatted_line}</td></tr>")
-        
+            if i in line_errs: LLM_marker = '⚠️'
+            else: LLM_marker = ''
+
+            table_rows.append(f"<tr><td>{start_time_str} - {end_time_str}</td><td>{formatted_line}</td><td>{LLM_marker}</td></tr>")
+            
     return table_header + "".join(table_rows) + "</tbody></table>"
 
 # Execute the whisper model for transcription
@@ -541,6 +568,7 @@ def handle_batch_analysis(files, progress=gr.Progress()):
     num_files = len(files)
     for i, audio_file in enumerate(files):
         progress((i + 1) / num_files, desc=f"Analyzing File {i + 1} of {num_files}")
+        print(f"\n---Analyzing File {i + 1} of {num_files}---")
         filename = os.path.basename(audio_file.name)
         
         # MODIFIED: Restructured analysis flow
@@ -551,6 +579,8 @@ def handle_batch_analysis(files, progress=gr.Progress()):
         processed_data = process_transcription(analysis_state['transcription_result'])
         analysis_state['transcript'] = processed_data['transcript']
         analysis_state['initial_explicit_ids'] = processed_data['initial_explicit_ids']
+        analysis_state['line_errs'] = processed_data['line_errs']
+        filth = processed_data['filthiness']
 
         # Step 3: Calculate WER score now that we have the processed transcript
         transcript_text = " ".join([word['text'] for seg in analysis_state['transcript'] for word in seg['line_words']])
@@ -560,13 +590,13 @@ def handle_batch_analysis(files, progress=gr.Progress()):
         del analysis_state['transcription_result']
 
         all_results[filename] = analysis_state
-        print(f"Transcription complete for: {filename} (file {i+1} of {num_files})")
+        print(f"Song {i+1} of {num_files} - Transcription complete for: {filename} ({filth*100:.2f}% filthy)")
 
     file_list = list(all_results.keys())
     first_file_results = all_results[file_list[0]]
     explicit_count_first_file = len(first_file_results['initial_explicit_ids'])
     header = format_metadata_header(file_list[0], first_file_results['metadata'], explicit_count_first_file)
-    transcript_html = generate_static_transcript(first_file_results['transcript'], first_file_results['initial_explicit_ids'])
+    transcript_html = generate_static_transcript(first_file_results['transcript'], first_file_results['initial_explicit_ids'], first_file_results['line_errs'])
     
     any_explicit_content = any(len(res['initial_explicit_ids']) > 0 for res in all_results.values())
     if any_explicit_content:
@@ -593,7 +623,7 @@ def update_details_view(selected_filename, all_results):
     file_results = all_results[selected_filename]
     explicit_word_count = len(file_results['initial_explicit_ids'])
     header = format_metadata_header(selected_filename, file_results['metadata'], explicit_word_count)
-    transcript_html = generate_static_transcript(file_results['transcript'], file_results['initial_explicit_ids'])
+    transcript_html = generate_static_transcript(file_results['transcript'], file_results['initial_explicit_ids'], file_results['line_errs'])
     return header, transcript_html
 
 # Apply the edits to all songs
@@ -649,6 +679,8 @@ def return_to_start(all_results):
     )
 
 
+
+
 ######  Gradio UI   ########
 
 ## CSS for formatting
@@ -662,6 +694,7 @@ css = """
 s { color: #d32f2f; text-decoration: line-through; }
 """
 
+# Main page definition
 with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
     analysis_results_state = gr.State(None)
 
@@ -680,20 +713,26 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
         
             gr.Markdown('---')
             gr.Markdown('### How it works')
-            gr.Markdown("This app uses a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to create a lyrics transcript of the uploaded music files. Explicit content (e.g., curse words) are then searched for in the lyrics transcript and highlighted. The vocals stem of the track is split off from the song using [demucs](https://github.com/facebookresearch/demucs) and muted at the appropriate times to create a high-quality edited version of the song.")
+            gr.Markdown("""
+                        This app uses a fine-tuned version of OpenAI's automatic speech recognition model [Whisper](https://github.com/openai/whisper) to create lyrics transcripts of the uploaded music files. Explicit words and phrases are as follows. 
+                        
+                        - Always explicit content (e.g., profanity, slurs) is immediately censored. 
+                        - A language model ([Google Gemma 2](https://huggingface.co/google/gemma-2-9b-it)) then detects edge cases (e.g., drug references, sexually inappropriate content).
+                        
+                        Explicit content is highlighted in red strikehtough text in the full transcript. The vocals stem of the track is split off from the song using [demucs](https://github.com/facebookresearch/demucs) and muted at the appropriate times. The result is a high quality edited track, ready for air play.
+                        """)
 
         with gr.Column(visible=False) as review_view:
             gr.Markdown("### Review transcript(s) and apply edits")
-            gr.Markdown(f'Words to be censored will appear in <caption>{html.escape("red strikethrough")}</s> text in the transcript below. Apply edits by clicking **Apply all edits** below.')
-            gr.Markdown("""Entries in the **Explicit flag** column are determined by running the corresponding line through a [toxicity filter](https://huggingface.co/cardiffnlp/twitter-roberta-large-sensitive-multilabel). 
-                         
-                        - 💥 = violence or self harm
-                        - 🤬 = curse words
-                        - 🚬 = drugs
-                        - 🔞 = sexual content
-                        
-                        We are currently working on allowing users to select additional words to censor from the full transcript, this flag should guide users towards identifying additional potentially explicit lines.""")
-            gr.Markdown("**Note**: Whisper's processing is not deterministic and it can sometimes get confused and hallucinate with audio. If your transcription seems inaccurate (e.g., a line contains the same word repeated *many* times, or a line contains a significant amount of transcribed text not present in the song), please try running the program again on that song.")
+            gr.Markdown(f'Words to be censored will appear in <caption>{html.escape("red strikethrough")}</s> text in the transcript below. Click **Apply all edits** to apply the edits, this will reveal a link to download your edited file(s)')
+            gr.Markdown("""
+                        **Important** Language models are not deterministic and can fail in various ways. 
+                            
+                        - If you find that a portion of the lyrics has not been transcribed correctly/at all, please consider running the tool again on that song.
+                        - If you see a column titled "LLM Error", then any rows containing the symbol "⚠️" were unable to be processed by the language model for edge-case explicit content. "Always explicit" content will still be censored, but this row may be missing censoring tags on additional edge-case content.
+
+                        Always check your edited files against an official source to make sure all of the desired explicit content has been detected and censored.    
+                        """)
             
             with gr.Row(variant="panel"):
                 with gr.Column(scale=1):

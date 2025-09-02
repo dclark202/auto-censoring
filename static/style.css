@@ -1,0 +1,186 @@
+/* =================================== */
+/* Dark Theme Styles                   */
+/* =================================== */
+
+body {
+    background-color: #121212; /* A very dark gray, less harsh than black */
+    color: #e0e0e0;            /* A soft white for body text */
+    max-width: 1280px;
+}
+
+hr {
+    border: 0;                /* Remove the default 3D-effect border */
+    height: 2px;              /* Set the thickness of the line */
+    background-color: #004d40;   /* Set the line color (a medium gray) */
+}
+
+/* Make headings pure white to stand out */
+h1, h2, h3, h4, h5, h6 {
+    color: #ffffff;
+}
+
+/* Make links a readable light blue */
+a {
+    color: #004d40;
+}
+
+
+/* Style for containers like the upload form */
+.upload-form {
+    background-color: #1e1e1e;
+    max-width: 600px;         /* Sets the form's maximum width. Adjust as needed. */
+    margin: 2rem auto;        /* Centers the form horizontally and adds vertical space. */
+    padding: 2rem;            /* Adds space inside the form box. */
+    border: 1px solid #ddd;   /* Adds a light gray border. */
+    border-radius: 5px;       /* Rounds the corners of the border. */
+    font-weight: bold;
+}
+
+/* Style for the clickable file list */
+.clickable-list {
+    list-style-type: none;
+    padding: 0;
+    margin: 0;
+}
+
+.clickable-list .file-item {
+    padding: 0.75rem;
+    border: 1px solid #ddd; /* This sets the color */
+    margin-bottom: -1px;
+    background-color: #1e1e1e;
+
+}
+.clickable-list .file-item:hover {
+    background-color: #333;
+}
+.clickable-list .file-item.active {
+    background-color: #0d47a1; /* A deep blue for the active item */
+    border-color: #8ab4f8;
+}
+
+/* Dark theme for tables */
+table, th, td {
+    border-color: #444;
+}
+
+/* Dark theme for buttons */
+button, .process-button {
+    background-color: #004d40; /* A dark teal */
+    color: #ffffff;
+    border-color: #004d40;
+    padding: 1.2rem; 
+    font-weight: bold;
+    font-size: 1.5rem;
+}
+button:hover, .process-button:hover {
+    background-color: #00695c; /* A slightly lighter teal for hover */
+    border-color: #00695c;
+}
+
+.review-container {
+    display: flex;
+    gap: 2rem; 
+}
+
+.left-column {
+    flex: 1; 
+}
+
+.right-column {
+    flex: 3; 
+}
+
+.word-toggle {
+    cursor: pointer;
+}
+
+.word-toggle.censored {
+    color: #d32f2f;
+    text-decoration: line-through;
+}
+
+s {
+    color: #d32f2f;
+    text-decoration: line-through;
+}
+
+footer {
+    text-align: center;    
+    margin-top: 4rem;       
+    padding-bottom: 2rem;   
+}
+
+footer p {
+    color: #888; 
+}
+
+/* =================================== */
+/* Loading Overlay Styles              */
+/* =================================== */
+#loading-overlay {
+    position: fixed; /* This is the key property that lifts it over the page */
+    width: 100%;
+    height: 100%;
+    top: 0;
+    left: 0;
+    background-color: rgba(18, 18, 18, 0.85);
+    z-index: 999;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.loading-box {
+    text-align: center;
+    padding: 2rem 3rem;
+    background-color: #1e1e1e;
+    border: 1px solid #444;
+    border-radius: 5px;
+}
+
+/* A simple class to hide the overlay by default */
+#loading-overlay.hidden {
+    display: none;
+}
+
+.btn-secondary {
+    display: block; /* Make the link behave like a block for styling */
+    text-align: center;
+    text-decoration: none;
+    margin-top: 1rem;
+    padding: 0.75rem; /* Make padding a bit smaller than the main button */
+    border-radius: 5px;
+    font-weight: bold;
+    background-color: transparent;
+    border: 2px solid #004d40; /* Use your theme's accent color for the border */
+    color: #004d40;
+    cursor: pointer;
+    transition: all 0.2s ease-in-out;
+}
+
+.btn-secondary:hover {
+    background-color: #004d40; /* Fill in the color on hover */
+    color: #ffffff;
+}
+
+.btn-browse {
+    display: inline-block;
+    padding: 0.75rem 1.25rem;
+    border-radius: 5px;
+    background-color: #555;
+    color: #fff;
+    cursor: pointer;
+    font-weight: bold;
+    text-align: center;
+    border: 1px solid #666;
+    margin-bottom: 1rem;
+}
+.btn-browse:hover {
+    background-color: #666;
+}
+
+/* Visual feedback for when a user drags a file over the form */
+.upload-form.drag-over {
+    border-color: #8ab4f8; /* A light blue to indicate a valid drop zone */
+    background-color: #2a2a2a;
+}

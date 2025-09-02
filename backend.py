@@ -15,7 +15,7 @@ import whisper_timestamped as whisper
 import demucs.separate
 import numpy as np
 from pydantic import BaseModel, Field, ValidationError
-from typing import List
+from typing import List, Optional
 
 # LangChain
 from langchain_huggingface import HuggingFacePipeline
@@ -64,7 +64,7 @@ singular_curse_words = {
     'fag', 'cum', 'clit', 'wank' 'ho', 'hoes'
 }
 
-### JSON Parser
+### JSON Parser ###
 
 class LLMJsonResponse(BaseModel):
     explicit_phrases_found: List[str] = Field(description="A list of the explicit phrases found in the text")
@@ -98,7 +98,10 @@ def my_custom_json_parser(response_text: str):
         print(f"❌ Custom parser failed: {e}")
         # Raise an exception so the batch handler knows this item failed
         raise ValueError(f"JSON validation failed: {e}")
-    
+
+## cam delete ^^
+
+
 ###############################################################################################
 ### CORE LOGIC & HELPER FUNCTIONS
 ###############################################################################################
@@ -213,7 +216,7 @@ def analyze_audio(audio_path, model, device):
     vocals_path = os.path.join(run_temp_dir, "mdx_extra", demucs_out_name, "vocals.wav")
     no_vocals_path = os.path.join(run_temp_dir, "mdx_extra", demucs_out_name, "no_vocals.wav")
 
-    audio = whisper.load_audio(vocals_path) #change to preprocessed_path to use exp settings
+    audio = whisper.load_audio(vocals_path) # change to preprocessed_path to use exp settings
 
     print(f'\nTranscribing audio...')
     result = whisper.transcribe(
@@ -221,11 +224,9 @@ def analyze_audio(audio_path, model, device):
         audio, 
         beam_size=5, 
         best_of=5, 
-        #min_word_duration=.2, # 200ms min word duration
-        remove_empty_words=True,
+        remove_empty_words=True, # revomves nonsense from the end of the transcript
         #refine_whisper_precision=.8, # ??
-        #vad='silero', # Use silero to remove sections of silence
-        #logprob_threshold=-1,
+        #vad='silero', # Use silero to remove sections of silence, 
         temperature=(0.0, 0.2, 0.4, 0.6, 0.8), 
         language="en", 
         task='transcribe'
@@ -356,13 +357,13 @@ def process_transcription(transcription_result, llm_chain, use_llm=True):
 def apply_censoring(analysis_state, ids_to_censor):
     if not ids_to_censor: return None
     
-    ids_set = set(ids_to_censor)
+    ids_set = {tuple(item) for item in ids_to_censor}
     times_to_censor = []
     transcript = analysis_state.get('transcript', [])
 
     for segment in transcript:
         for word in segment.get('line_words', []):
-            if word.get('id') in ids_set:
+            if tuple(word.get('id')) in ids_set:
                 times_to_censor.append({'start': word['start'], 'end': word['end']})
 
     times_in_ms = [(int(t['start']*1000), int(t['end']*1000)) for t in times_to_censor]
@@ -412,25 +413,6 @@ pipe = pipeline(
 )
 hf_pipeline = HuggingFacePipeline(pipeline=pipe)
 
-# old prompt
-# """
-# You are an AI that extracts highly explicit content from text. You should search the text for words that are not appropriate to play on the radio or other public broadcasts. Do not provide any warnings, apologies, or explanations. Respond ONLY with the raw JSON.
-
-# Analyze the text for explicit content in the following categories:
-# - profanity
-# - drug_references
-# - firearms_and_weapons
-# - excessive_violence
-# - sexual_content
-
-# **Text to Analyze:**
-# "{text_to_analyze}"
-
-# Return a single JSON object with one key: "explicit_phrases_found" containing a list of each word or phrase EXACTLY as it appears in the text.
-
-# Provide only the raw JSON object as your final response.
-# """
-
 
 prompt_str = """
 You are an AI content moderator for a US radio station. Your goal is to identify words and phrases that would be considered 'indecent' or 'profane' under FCC broadcast standards, making them unsuitable for daytime airplay.
@@ -464,6 +446,7 @@ analysis_jobs = {}
 
 class FinalizeRequest(BaseModel):
     job_id: str
+    ids_to_censor: Optional[List[List[int]]] = None # <-- ADD THIS LINE
 
 @app.post("/analyze/")
 async def analyze_file(file: UploadFile = File(...)):
@@ -522,26 +505,24 @@ async def analyze_file(file: UploadFile = File(...)):
 
 @app.post("/finalize/")
 async def finalize_file(request: FinalizeRequest):
-    """
-    Takes a job ID, applies the censoring to the audio files stored from the
-    analysis step, and returns the final edited audio file for download.
-    """
     job_id = request.job_id
     if job_id not in analysis_jobs:
-        raise HTTPException(status_code=404, detail="Job not found. Please analyze the file again.")
+        raise HTTPException(status_code=404, detail="Job not found.")
 
     analysis_state = analysis_jobs[job_id]
-    ids_to_censor = analysis_state.get('initial_explicit_ids', [])
-    
-    print(f"Finalizing edits for job {job_id}...")
+
+    # FIX: This logic now correctly uses the user's edits if they exist.
+    ids_to_censor = request.ids_to_censor
+    if ids_to_censor is None:
+        ids_to_censor = analysis_state.get('initial_explicit_ids', [])
+
+    print(f"Finalizing edits for job {job_id} with {len(ids_to_censor)} words to censor...")
     try:
         output_path = apply_censoring(analysis_state, ids_to_censor)
 
         if not output_path:
-            # Handle case where there was nothing to censor
             raise HTTPException(status_code=400, detail="No explicit content was marked for censoring.")
         
-        # Return the file as a downloadable response
         return FileResponse(path=output_path, media_type='audio/mpeg', filename=os.path.basename(output_path))
     
     except Exception as e:
