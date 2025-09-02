@@ -1,26 +1,30 @@
 # backend.py
-import os
-import re
-import html
-import json
-import shutil
-import tempfile
-import uuid
+import os, re, json, shutil, tempfile, uuid
 from datetime import datetime
 
 # FastAPI and related imports
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
 
-# ML/Audio libraries
+# ML libraries
 import torch
 import transformers
-from transformers import AutoTokenizer, WhisperForConditionalGeneration, AutoModelForCausalLM, BitsAndBytesConfig
+from transformers import AutoTokenizer, WhisperForConditionalGeneration, AutoModelForCausalLM, BitsAndBytesConfig, pipeline
 from peft import PeftModel
-import whisper
-import whisper_timestamped as whisper_t
+import whisper_timestamped as whisper
 import demucs.separate
+import numpy as np
+from pydantic import BaseModel, Field, ValidationError
+from typing import List
+
+# LangChain
+from langchain_huggingface import HuggingFacePipeline
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.runnables import RunnableLambda
+from langchain.output_parsers import OutputFixingParser
+
+# Audio processing
 from pydub import AudioSegment
 from mutagen.easyid3 import EasyID3
 import lyricsgenius
@@ -37,8 +41,8 @@ print(f"Executing backend.py at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
 # --- API Keys & Tokens (Load from environment variables for security) ---
 GENIUS_API_TOKEN = os.getenv("GENIUS_API_TOKEN")
-if not GENIUS_API_TOKEN:
-    print("WARNING: GENIUS_API_TOKEN environment variable not set. Genius API features will fail.")
+if not GENIUS_API_TOKEN: print("WARNING: GENIUS_API_TOKEN environment variable not set. Genius API features will fail.")
+
 genius = lyricsgenius.Genius(GENIUS_API_TOKEN, verbose=False, remove_section_headers=True) if GENIUS_API_TOKEN else None
 
 # --- Model & Device Configuration ---
@@ -55,10 +59,46 @@ default_curse_words = {
     'cunt', 'tits', 'pussy', 'dick', 'asshole', 'whore', 'goddam',
     'douche', 'chink', 'tranny', 'jizz', 'kike', 'gook', 'cocksucker'
 }
+
 singular_curse_words = {
     'fag', 'cum', 'clit', 'wank' 'ho', 'hoes'
 }
 
+### JSON Parser
+
+class LLMJsonResponse(BaseModel):
+    explicit_phrases_found: List[str] = Field(description="A list of the explicit phrases found in the text")
+
+def my_custom_json_parser(response_text: str):
+    """
+    Finds a JSON string in the LLM's response, then parses and validates it.
+    """
+    # This regex is a good way to find a JSON block
+    match = re.search(r"```(json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
+    if match:
+        json_str = match.group(2)
+    else:
+        # Fallback to finding the first and last curly braces
+        start_index = response_text.find('{')
+        end_index = response_text.rfind('}')
+        if start_index != -1 and end_index != -1 and start_index < end_index:
+            json_str = response_text[start_index:end_index+1]
+        else:
+            print("❌ No JSON object found in the response.")
+            # It's good practice to raise an exception here for the batch handler
+            raise ValueError("No JSON object found")
+    
+    try:
+        # We can use the Pydantic model directly to parse and validate
+        validated_data = LLMJsonResponse.model_validate_json(json_str)
+        # Return the data as a standard Python dictionary
+        return validated_data.model_dump()
+        
+    except (ValidationError, json.JSONDecodeError) as e:
+        print(f"❌ Custom parser failed: {e}")
+        # Raise an exception so the batch handler knows this item failed
+        raise ValueError(f"JSON validation failed: {e}")
+    
 ###############################################################################################
 ### CORE LOGIC & HELPER FUNCTIONS
 ###############################################################################################
@@ -76,8 +116,6 @@ def load_whisper_model(model_path, lora_config, base_model_name):
     model.save_pretrained(model_path, save_serialization=False)
     print(f'Whisper model from {lora_config} saved at {model_path}')
 
-# --- Start of functions moved from original script ---
-
 # Removes all punctuation and returns lower case only words
 def remove_punctuation(s):
     s = re.sub(r'[^a-zA-Z0-9\s]', '', s)
@@ -87,8 +125,10 @@ def remove_punctuation(s):
 def silence_audio_segment(input_audio_path, output_audio_path, times):
     audio = AudioSegment.from_file(input_audio_path)
     for (start_ms, end_ms) in times:
-        silence = AudioSegment.silent(duration=end_ms - start_ms)
-        audio = audio[:start_ms] + silence + audio[end_ms:]
+        before_segment = audio[:start_ms]
+        target_segment = audio[start_ms:end_ms] - 60
+        after_segment = audio[end_ms:]
+        audio = before_segment + target_segment + after_segment
     audio.export(output_audio_path, format='wav')
 
 # For combining the vocals and instrument stems once the censoring has been applied
@@ -115,6 +155,7 @@ def transfer_metadata(original_audio_path, edited_audio_path):
         for key in audio_orig.keys():
             audio_edit[key] = audio_orig[key]
         audio_edit.save()
+
     except Exception as e:
         print(f"Could not transfer metadata: {e}")
 
@@ -129,18 +170,22 @@ def get_genius_url(artist, song_title):
 # It's called calculate_wer but I'm actually using *mer*
 def calculate_wer(ground_truth, hypothesis):
     if not ground_truth or not hypothesis or "not available" in ground_truth.lower(): return None
+    
     try:
         transformation = jiwer.Compose([jiwer.ToLowerCase(), jiwer.RemovePunctuation(), jiwer.RemoveMultipleSpaces(), jiwer.Strip(), jiwer.ExpandCommonEnglishContractions(), jiwer.RemoveEmptyStrings()])
         error = jiwer.mer(transformation(ground_truth), transformation(hypothesis))
         return f"{error:.3f}"
+    
     except Exception: return "Error"
 
 # Gets the lyrics from genius for a given song
 def get_genius_lyrics(artist, song_title):
     if not genius or not artist or not song_title or artist == 'N/A' or song_title == 'N/A': return "Lyrics not available (missing metadata or Genius API key)."
+    
     try:
         song = genius.search_song(song_title, artist)
         return song.lyrics if song else "Could not find lyrics on Genius."
+    
     except Exception: return "An error occurred while searching for lyrics."
 
 # Separate track via demucs, evaluate vocals with Whisper
@@ -154,14 +199,38 @@ def analyze_audio(audio_path, model, device):
     metadata['genius_url'] = get_genius_url(metadata['artist'], metadata['title'])
     metadata['genius_lyrics'] = get_genius_lyrics(metadata['artist'], metadata['title'])
 
-    demucs.separate.main(["--two-stems", "vocals", "-n", "mdx_extra", "-o", run_temp_dir, temp_audio_path])
+    print()
+    demucs.separate.main([
+        "--two-stems", "vocals", # separate vocals from non-vocals
+        "--shifts", "2", # two shifts. For better quality use more!
+        "-j", "8", # num parallel jobs
+        "-n", "mdx_extra", # mdx_extra transcription model
+        "-o", run_temp_dir, # set the output directory
+        temp_audio_path # input file
+    ])
+    
     demucs_out_name = os.path.splitext(os.path.basename(temp_audio_path))[0]
     vocals_path = os.path.join(run_temp_dir, "mdx_extra", demucs_out_name, "vocals.wav")
     no_vocals_path = os.path.join(run_temp_dir, "mdx_extra", demucs_out_name, "no_vocals.wav")
 
-    audio = whisper_t.load_audio(vocals_path)
-    result = whisper_t.transcribe(model, audio, beam_size=5, best_of=5, temperature=(0.0, 0.2, 0.4, 0.6, 0.8), language="en", task='transcribe')
+    audio = whisper.load_audio(vocals_path) #change to preprocessed_path to use exp settings
 
+    print(f'\nTranscribing audio...')
+    result = whisper.transcribe(
+        model, 
+        audio, 
+        beam_size=5, 
+        best_of=5, 
+        #min_word_duration=.2, # 200ms min word duration
+        remove_empty_words=True,
+        #refine_whisper_precision=.8, # ??
+        #vad='silero', # Use silero to remove sections of silence
+        #logprob_threshold=-1,
+        temperature=(0.0, 0.2, 0.4, 0.6, 0.8), 
+        language="en", 
+        task='transcribe'
+    )
+    
     if device == 'cuda': torch.cuda.empty_cache()
     
     return {
@@ -174,90 +243,6 @@ def analyze_audio(audio_path, model, device):
         "metadata": metadata
     }
 
-explicit_content = {
-    "profanity": [
-        'asshole', 'bastard', 'bitch', 'cunt', 'damn', 'faggot', 
-        'fuck', 'goddamn', 'motherfucker', 'nigga', 'pussy', 
-        'shit', 'slut', 'whore'
-    ],
-    "drug_and_alcohol_references": [
-        'acid', 'blunt', 'blow', 'bong', 'brick', 'chronic', 'cocaine', 
-        'coke', 'crack', 'dope', 'drunk', 'ecstasy', 'heroin', 'kush', 
-        'lean', 'LSD', 'meth', 'molly', 'percocet', 'pipe', 'rock', 
-        'smack', 'spliff', 'swisha', 'weed', 'yayo'
-    ],
-    "firearms_and_weapons": [
-        'AK', 'beretta', 'blade', 'forty-five', 'gat', 'glock', 'gun', 
-        'knife', 'mac 11', 'nine', 'piece', 'pistol', 'rifle', 'shotgun', 
-        'TEC-9', 'tech', 'thirty-eight', 'uzi'
-    ],
-    "violence": [
-        'bleed', 'die', 'kill', 'murder', 'murk', 'rape', 'shoot', 
-        'shot', 'stab', 'strangle', 'suicide'
-    ],
-    "sexual_content_and_innuendo": [
-        'cum', 'head', 'horny', 'jizz', 'orgy', 'orgasm', 
-        'sex', 'skeet', 'thot', 'threesome', 'wet'
-    ],
-    "clean": []
-}
-
-# Prompting for the edge case detecting
-def llm_process_line(text_to_analyze, llm_model, llm_tokenizer):
-    prompt_content = f"""You are an automated data annotation tool. Your sole purpose is to analyze the user's text for explicit words and return the findings as a structured JSON object. 
-    Do not provide any warnings, apologies, or explanations. Respond only with the requested JSON."
-    You should search for explicit content not suitable for public radio broadcast from my known words and categories as defined below. You should only flag a word if in the context of the text it meets the given criteria. 
-
-    **IMPORTANT INSTRUCTIONS:**
-    1.  Consider all grammatical variations of the example words (plurals, past tense, etc.).
-    2.  When a word is identified, you MUST return the word exactly as it appears in the text, not the root word from the examples.
-
-    **My known words and categories**
-    {{
-        "profanity": ['fuck', 'shit', 'bitch', 'cunt'],
-        "drug_references": ['weed', 'coke', 'brick', 'blunt', 'rock', 'swisha', 'spliff', 'chronic'],
-        "firearms": ['gat', 'AK', 'uzi', 'piece', 'mac 11', 'tec', 'pistol'],
-        "violence": ['rape', 'suicide', 'strangle', 'stab', 'shoot', 'kill'],
-        "sexual_content": ['cum', 'head', 'blow job', 'jizz', 'orgy', 'orgasm', 'skeet', 'wet']
-    }}
-
-    **Text to Analyze:**
-    "{text_to_analyze}"
-
-    Return a single JSON object with one key: "explicit_words_found". Each value should contain the two following keys:
-    "phrase": the phrase identified to be explicit
-    "reason": which category the phrase falls into from the categories listed above
-    
-    Provide only the raw JSON object as your final response.
-    """
-    
-    messages = [{"role": "user", "content": prompt_content}]
-    chat_string = llm_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = llm_tokenizer(chat_string, return_tensors="pt").to(llm_model.device)
-
-    outputs = llm_model.generate(**inputs, max_new_tokens=128, pad_token_id=llm_tokenizer.eos_token_id)
-    response_text = llm_tokenizer.decode(outputs[0][inputs['input_ids'].shape[-1]:], skip_special_tokens=True)
-
-    return response_text 
-
-# For better formatting and reading the output of the LLM
-def parse_llm_json_output(response_text):
-    match = re.search(r"```(json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
-    if match:
-        json_str = match.group(2)
-    else:
-        start_index = response_text.find('{')
-        end_index = response_text.rfind('}')
-        if start_index != -1 and end_index != -1 and start_index < end_index:
-            json_str = response_text[start_index:end_index+1]
-        else:
-            return None
-    try:
-        return json.loads(json_str)
-    except json.JSONDecodeError:
-        return None
-
-
 def backup_censoring(text_tokens):
     backup_explicit_ids = set()
     prev_word = ''
@@ -267,8 +252,7 @@ def backup_censoring(text_tokens):
         is_explicit = any(curse in cleaned_word for curse in default_curse_words)
 
         # Short words that can be substrings of nonsensitive words
-        if cleaned_word in singular_curse_words:
-            backup_explicit_ids.add(j)
+        if cleaned_word in singular_curse_words: backup_explicit_ids.add(j)
 
         # Handle two word cluster "god dam*", "mother fuck*"
         elif ('dam' in cleaned_word and prev_word == 'god') or ('fuck' in cleaned_word and prev_word == 'mother') or (cleaned_word == 'off' and prev_word == 'jerk'):
@@ -281,12 +265,13 @@ def backup_censoring(text_tokens):
         
     return backup_explicit_ids
 
-def process_transcription(transcription_result, llm_model, llm_tokenizer):
+def process_transcription(transcription_result, llm_chain, use_llm=True):
     full_transcript = []
     ids_to_mute = []
+    low_quality = []
     raw_transcript = transcription_result.get("segments", [])
     
-    print('Checking for proper formatting of LLM output:')
+    ## Create transcript
     i = 0
     for segment in raw_transcript:
         segment_words = []
@@ -295,8 +280,7 @@ def process_transcription(transcription_result, llm_model, llm_tokenizer):
             word_text = word_info.get('text', '').strip()
             if not word_text: continue
             
-            start_time = float(word_info['start'])
-            end_time = float(word_info['end'])
+            start_time, end_time = float(word_info['start']), float(word_info['end'])
 
             # Filter out hallucinations with very low word length (100ms)
             if end_time - start_time < .1: continue 
@@ -307,60 +291,75 @@ def process_transcription(transcription_result, llm_model, llm_tokenizer):
             j += 1
 
         if not segment_words: continue
+
         i += 1
         line_text = ' '.join([d['text'] for d in segment_words])
         full_transcript.append({'line_words': segment_words, 'line_text': line_text, 'start': segment['start'], 'end': segment['end']})
 
-    total_song_words = 0
+        if segment['avg_logprob'] < -1.0: low_quality.append(i+1)
+            
+    if low_quality: print(f'Low quality sections: {low_quality}')
+
+    ## Use LLM for edge case detection
     line_errs = []
+    
+    if use_llm:
+        lines_to_analyze = [{"text_to_analyze": line['line_text']} for line in full_transcript]
 
-    for i, line_to_analyze in enumerate(full_transcript):
-        response_text = llm_process_line(line_to_analyze['line_text'], llm_model, llm_tokenizer)
-        text_tokens = [d['text'].strip().lower() for d in line_to_analyze['line_words']]
-        total_song_words += len(text_tokens)
+        try:
+            print('\nCalling the LLM for explicit content detection...')
+            llm_outputs = llm_chain.batch(lines_to_analyze, config={"max_concurrency": 8}) 
 
-        explicit_ids = backup_censoring(text_tokens)
-        llm_output = parse_llm_json_output(response_text)
+        except Exception as e:
+            print(f"The LLM failed spectacularly")
+            llm_outputs = [e] * len(lines_to_analyze)
+        
+        for i, llm_output in enumerate(llm_outputs):
+            #print(llm_output)
+            line_data = full_transcript[i]
+            text_tokens = [d['text'].strip().lower() for d in line_data['line_words']]
+            
+            explicit_ids = backup_censoring(text_tokens)
 
-        if not llm_output:
-            print(f'Error with LLM output at line {i+1}, trying again')
-            response_text = llm_process_line(line_to_analyze['line_text'], llm_model, llm_tokenizer)
-            llm_output = parse_llm_json_output(response_text)
+            # If the JSON parsing for the LLM fails
+            if isinstance(llm_output, Exception):
+                print(f'Parsing error at line {i+1}')
+                line_errs.append(i)
+            
+            else:
+                explicit_phrases = llm_output.get('explicit_phrases_found', [])
+                for phrase in explicit_phrases:
+                    try:
+                        phrase_tokens = phrase.split()
+                        n = len(phrase_tokens)
+                        for j in range(len(text_tokens) - n + 1):
+                            if [token.lower() for token in text_tokens[j:j+n]] == [p_token.lower() for p_token in phrase_tokens]:
+                                explicit_ids.update(range(j, j+n))
+                        
+                    except: continue
 
-        if llm_output:
-            print(f'Line {i+1} OK')
-            explicit_phrases = llm_output.get('explicit_words_found', [])
-            for d in explicit_phrases:
-                try:
-                    phrase_tokens = d["phrase"].split()
-                    n = len(phrase_tokens)
-                    for j in range(len(text_tokens) - n + 1):
-                        if [token.lower() for token in text_tokens[j:j+n]] == [p_token.lower() for p_token in phrase_tokens]:
-                            explicit_ids.update(range(j, j+n))
-                            break
-                except:
-                    continue
-        else:
-            print(f'-- Problem with LLM output at line {i+1}')
-            line_errs.append(i)
+            ids_to_mute.extend([(i,j) for j in sorted(list(explicit_ids))])
+    
+    ## If not using the LLM, just do the backup censoring
+    else:
+        for line in full_transcript:
+            text_tokens = [d['text'].strip().lower() for d in line['line_words']]
+            explicit_ids = backup_censoring(text_tokens)
+            ids_to_mute.extend([(i,j) for j in sorted(list(explicit_ids))])
 
-        ids_to_mute.extend([(i,j) for j in sorted(list(explicit_ids))])
-
-    filth = len(ids_to_mute) / total_song_words if total_song_words > 0 else 0
     return {
         "transcript": full_transcript,
         "initial_explicit_ids": ids_to_mute,
-        "filthiness": filth,
         "line_errs": line_errs
     }
 
 def apply_censoring(analysis_state, ids_to_censor):
-    if not ids_to_censor:
-        return None
+    if not ids_to_censor: return None
     
     ids_set = set(ids_to_censor)
     times_to_censor = []
     transcript = analysis_state.get('transcript', [])
+
     for segment in transcript:
         for word in segment.get('line_words', []):
             if word.get('id') in ids_set:
@@ -378,7 +377,6 @@ def apply_censoring(analysis_state, ids_to_censor):
 
     return output_path
 
-# --- End of functions moved from original script ---
 
 ###############################################################################################
 ### MODEL LOADING (GLOBAL - ON STARTUP)
@@ -386,22 +384,74 @@ def apply_censoring(analysis_state, ids_to_censor):
 
 # --- Load Whisper Model ---
 load_whisper_model(model_path=WHISPER_FT_MODEL_PATH, lora_config=LORA_CONFIG_PATH, base_model_name=WHISPER_BASE_MODEL)
-print("(1) Loading Whisper...")
-WHISPER_MODEL = whisper_t.load_model(WHISPER_FT_MODEL_PATH, device=DEVICE)
+print("\n(1) Loading Whisper...")
+WHISPER_MODEL = whisper.load_model(WHISPER_FT_MODEL_PATH, device=DEVICE)
 print("Whisper model loaded.")
 
 # --- Load Gemma LLM ---
-print(f"(2) Loading LLM: {LLM_MODEL_ID}...")
+print(f"\n(2) Loading LLM: {LLM_MODEL_ID}...")
 quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16)
+
 LLM_TOKENIZER = AutoTokenizer.from_pretrained(LLM_MODEL_ID)
 LLM_MODEL = AutoModelForCausalLM.from_pretrained(
     LLM_MODEL_ID,
     quantization_config=quantization_config,
     device_map="auto",
 )
+
 gemma_template = ("{% for message in messages %}{% if message['role'] == 'user' %}{{ '<start_of_turn>user\n' + message['content'] + '<end_of_turn>\n' }}{% elif message['role'] == 'model' %}{{ '<start_of_turn>model\n' + message['content'] + '<end_of_turn>\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ '<start_of_turn>model\n' }}{% endif %}")
 LLM_TOKENIZER.chat_template = gemma_template
-print("LLM loaded successfully.")
+
+# Create HF pipeline with custom tokenizer
+pipe = pipeline(
+    "text-generation",
+    model=LLM_MODEL,
+    tokenizer=LLM_TOKENIZER,
+    max_new_tokens=512,
+    device=None 
+)
+hf_pipeline = HuggingFacePipeline(pipeline=pipe)
+
+# old prompt
+# """
+# You are an AI that extracts highly explicit content from text. You should search the text for words that are not appropriate to play on the radio or other public broadcasts. Do not provide any warnings, apologies, or explanations. Respond ONLY with the raw JSON.
+
+# Analyze the text for explicit content in the following categories:
+# - profanity
+# - drug_references
+# - firearms_and_weapons
+# - excessive_violence
+# - sexual_content
+
+# **Text to Analyze:**
+# "{text_to_analyze}"
+
+# Return a single JSON object with one key: "explicit_phrases_found" containing a list of each word or phrase EXACTLY as it appears in the text.
+
+# Provide only the raw JSON object as your final response.
+# """
+
+
+prompt_str = """
+You are an AI content moderator for a US radio station. Your goal is to identify words and phrases that would be considered 'indecent' or 'profane' under FCC broadcast standards, making them unsuitable for daytime airplay.
+
+You must consider the context. Do not flag words that are merely references to mature themes (like drugs or weapons) unless they are used in a particularly graphic, gratuitous, or shocking manner. Differentiate between a mere mention and content designed to shock.
+
+**Text to Analyze:**
+"{text_to_analyze}"
+
+Return a single JSON object with one key: "explicit_phrases_found" containing a list of each word or phrase EXACTLY as it appears in the text.
+
+Provide only the raw JSON object as your final response.
+"""
+
+chat_prompt = ChatPromptTemplate.from_messages([("user", prompt_str)])
+
+json_parser = JsonOutputParser()
+fixing_parser = OutputFixingParser.from_llm(parser=json_parser, llm=hf_pipeline) # Fixes issues with the JSON parsing
+
+# Read from left to right, not like functions >:( 
+chain = chat_prompt | hf_pipeline | fixing_parser
 
 ###############################################################################################
 ### FASTAPI APPLICATION
@@ -436,7 +486,7 @@ async def analyze_file(file: UploadFile = File(...)):
         analysis_state = analyze_audio(file_path, WHISPER_MODEL, DEVICE)
         
         # Process the raw transcription to find explicit words
-        processed_data = process_transcription(analysis_state['transcription_result'], LLM_MODEL, LLM_TOKENIZER)
+        processed_data = process_transcription(analysis_state['transcription_result'], llm_chain=chain)
         analysis_state.update(processed_data)
 
         # Calculate WER score
@@ -459,16 +509,16 @@ async def analyze_file(file: UploadFile = File(...)):
             "initial_explicit_ids": analysis_state['initial_explicit_ids'],
             "line_errs": analysis_state['line_errs']
         }
+    
     except Exception as e:
         # Clean up if something goes wrong
-        if os.path.exists(temp_job_dir):
-            shutil.rmtree(temp_job_dir)
+        if os.path.exists(temp_job_dir): shutil.rmtree(temp_job_dir)
         print(f"ERROR during analysis for job {job_id}: {e}")
         raise HTTPException(status_code=500, detail=f"An error occurred during analysis: {e}")
+    
     finally:
         # Clean up the initial uploaded file's temp dir
-        if os.path.exists(temp_job_dir):
-            shutil.rmtree(temp_job_dir)
+        if os.path.exists(temp_job_dir): shutil.rmtree(temp_job_dir)
 
 @app.post("/finalize/")
 async def finalize_file(request: FinalizeRequest):
@@ -493,6 +543,7 @@ async def finalize_file(request: FinalizeRequest):
         
         # Return the file as a downloadable response
         return FileResponse(path=output_path, media_type='audio/mpeg', filename=os.path.basename(output_path))
+    
     except Exception as e:
         print(f"ERROR during finalization for job {job_id}: {e}")
         raise HTTPException(status_code=500, detail=f"An error occurred during finalization: {e}")

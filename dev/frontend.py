@@ -15,18 +15,15 @@ BACKEND_URL = "http://127.0.0.1:8000"
 # A local directory to store the final downloaded files from the backend
 DOWNLOADS_DIR = "final_downloads"
 
-# --- UI Helper Functions (copied from original script) ---
+# --- UI Helper Functions
 
 def seconds_to_minutes(time):
     mins = int(time // 60)
     secs = int(time % 60)
 
-    if secs == 0:
-        return f'{mins}:00'
-    elif secs < 10:
-        return f'{mins}:0{secs}'
-    else:
-        return f"{mins}:{secs}"
+    if secs == 0: return f'{mins}:00'
+    elif secs < 10: return f'{mins}:0{secs}'
+    else: return f"{mins}:{secs}"
 
 def format_metadata_header(filename, metadata, explicit_word_count):
     """Metadata display for the full transcriptions. Includes genius link if possible."""
@@ -247,6 +244,15 @@ css = """
 s { color: #d32f2f; text-decoration: line-through; }
 """
 
+js_confirm_reset = """
+() => {
+  if (confirm('Are you sure you want to return to the start? All current analysis will be lost.')) {
+    // Find the hidden button by its elem_id and click it
+    document.getElementById('hidden_return_button').click();
+  }
+}
+"""
+
 with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
     analysis_results_state = gr.State(None)
 
@@ -290,7 +296,8 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
                 with gr.Column(scale=1):
                     processed_files_selector = gr.Radio(label="Select a file to view its transcript", interactive=True, elem_id="processed-files-radio")
                     apply_button = gr.Button("Apply all edits", elem_id="apply-button", interactive=False)
-                    return_to_start_button = gr.Button("Return to start")
+                    # return_to_start_button = gr.Button("Return to start")
+                    # hidden_return_button = gr.Button("hidden_return", visible=False, elem_id="hidden_return_button")
                     with gr.Column(visible=False) as final_view:
                         final_status_output = gr.Markdown()
                         edited_files_output = gr.File(label="Download your edited files", file_count="multiple")
@@ -319,15 +326,16 @@ with gr.Blocks(theme=gr.themes.Soft(), title="FSP Finder", css=css) as demo:
         inputs=[analysis_results_state],
         outputs=[review_view, loading_view, final_view, final_status_output, edited_files_output, processed_files_selector, apply_button]
     )
-    return_to_start_button.click(
-        fn=return_to_start,
-        inputs=[analysis_results_state],
-        outputs=[
-            upload_view, review_view, final_view, apply_button, processed_files_selector,
-            analysis_results_state, details_header, transcript_output, final_status_output,
-            edited_files_output, files_input
-        ],
-        js="() => { if (confirm('Are you sure you want to return to the start? All current analysis will be lost.')) { return true; } else { return false; } }"
-    )
+
+#     return_to_start_button.click(
+#         fn=return_to_start,
+#         inputs=[analysis_results_state],
+#         outputs=[
+#             upload_view, review_view, final_view, apply_button, processed_files_selector,
+#             analysis_results_state, details_header, transcript_output, final_status_output,
+#             edited_files_output, files_input
+#         ],
+#         js="() => { if (confirm('Are you sure you want to return to the start? All current analysis will be lost.')) { return true; } else { return false; } }"
+#     )
     
 demo.launch(favicon_path='fav.png')
