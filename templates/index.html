@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>FSP Finder - Upload</title>
     <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}">
-    
+
     <link rel="stylesheet" href="https://unpkg.com/sakura.css/css/sakura.css" type="text/css">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
@@ -17,12 +17,12 @@
     <h4>How to use this tool</h4> 
     <ul>
       <li>Upload one or more audio files using the box below. Most common audio formats are accepted (e.g., .mp3, .wav, etc.)</li>
-      <li>Click the <b>Process audio</b> button to create the transcriptions of the uploaded track(s). You will have a chance to review the edits before applying the censoring.</li>
+      <li>Click the <b>Process audio</b> button to create the transcriptions of the uploaded track(s). You will have a chance to review the edits before applying the censoring</li>
     </ul>
     
-   <form action="/analyze" method="post" enctype="multipart/form-data" class="upload-form">
+   <form action="/analyze" method="post" enctype="multipart/form-data" class="upload-form" novalidate>
       
-      <p>Drag & drop your audio files here or click to browse.</p>
+      <p>Drag & drop your audio files here or click to browse</p>
       
       <input type="file" name="file" id="file-input" required multiple hidden>
       
@@ -37,12 +37,16 @@
     </form>
     
       <h4>How it works</h4> 
-      <p>This app uses a fine-tuned version of OpenAI's automatic speech recognition model <a href="https://github.com/openai/whisper">Whisper</a> to create lyrics transcripts of the uploaded music files. Explicit words and phrases are as follows.</p>
-      <ul>
-        <li>Always explicit content (e.g., profanity, slurs) is immediately censored.</li>
-        <li>A language model (<a href="https://huggingface.co/google/gemma-2-9b-it">Google Gemma 2</a>) then detects edge cases (e.g., drug references, sexually inappropriate content).</li>
-      </ul>
-      <p>Explicit content is highlighted in <s>red strikethrough</s> text in the full transcript. The vocals stem of the track is split off from the song using <a href="https://github.com/facebookresearch/demucs">demucs</a> and muted at the appropriate times. The result is a high quality edited track, ready for air play.</p>
+      <p>This app uses a fine-tuned version of OpenAI's automatic speech recognition model <a href=https://github.com/openai/whisper>Whisper</a> to create lyrics transcripts of the uploaded music files. 
+        Always explicit content (e.g., profanity, slurs) is immediately censored.
+        A language model (<a href=https://huggingface.co/google/gemma-2-9b-it>Google Gemma 2</a>) then detects edge cases (e.g., drug references, sexually inappropriate content).
+        Explicit content is highlighted in <s>red strikethrough</s> text in the full transcript. 
+        The vocals stem of the track is split off from the song using <a href="https://github.com/facebookresearch/demucs">demucs</a> and muted at the corresponding times, creating a high quality edited track, ready for air play.</p>
+
+      <h4>How you can help</h4>
+      <p>We need user feedback! If you have comments, suggestions, or concerns, please <a href="{{ url_for('contact') }}">contact us</a>.</p>
+
+        <p><b>Please note</b>: By using this tool, you are agreeing to our <a href="{{ url_for('terms') }}">Terms of Service</a></p>
 
     <div id="loading-overlay" class="hidden">
         <div class="loading-box">
@@ -54,7 +58,9 @@
     <footer>
         <hr>
         <p>
-            &copy; 2025 FSP Finder | <a href="https://github.com/dclark202/auto-censoring">View Project on GitHub</a>
+            &copy; 2025 FSP Finder | 
+            <a href="https://github.com/dclark202/auto-censoring">View project on GitHub</a> |
+            <a href="{{ url_for('contact') }}">Contact us</a>
         </p>
     </footer>
 
@@ -99,9 +105,22 @@
           fileInput.addEventListener('change', updateFileList);
 
           // This now only shows the overlay on submit.
-          uploadForm.addEventListener('submit', () => {
-              loadingOverlay.classList.remove('hidden');
-          });
+          uploadForm.addEventListener('submit', (event) => {
+                // Check if any files have been selected
+                if (fileInput.files.length === 0) {
+                    // 1. Stop the form from submitting
+                    event.preventDefault(); 
+                    
+                    // 2. Show the alert message
+                    alert("Please upload at least one audio file before processing.");
+                    
+                    // 3. Exit the function
+                    return; 
+                }
+
+                // If files are selected, show the loading overlay as normal
+                loadingOverlay.classList.remove('hidden');
+            });
       });
     </script>
 </body>

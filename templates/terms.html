@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Terms of Service - FSP Finder</title>
+    <link rel="stylesheet" href="https://unpkg.com/sakura.css/css/sakura.css" type="text/css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="icon" href="{{ url_for('static', filename='favicon.png') }}">
+</head>
+<body>
+    <h3>Terms of Service</h3>
+    <p><em>Last Updated: September 3, 2025</em></p>
+
+    <h6>Data collection</h6>
+    <p>
+        FSP Finder reserves the rights to collect user transcript (text) data. 
+        This data will be used for further training the edge case detection language model by learning from what type of content users are censoring.
+        FSP Finder will not collect any audio data uploaded by the users.
+    </p>
+
+    <p>
+
+        
+    </p>
+    <p style="text-align: center; margin-top: 2rem;">
+        <a href="{{ url_for('index') }}">Return to Home</a>
+    </p>
+
+    <footer>
+        <hr>
+        <p>
+            &copy; 2025 FSP Finder | 
+            <a href="https://github.com/dclark202/auto-censoring">View project on GitHub</a> |
+            <a href="{{ url_for('contact') }}">Contact us</a>
+        </p>
+    </footer>
+</body>
+</html>

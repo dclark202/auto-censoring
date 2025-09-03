@@ -21,9 +21,17 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Make links a readable light blue */
 a {
-    color: #004d40;
+    color: #8ab4f8;
 }
 
+a:visited {
+    color: #8ab4f8;
+}
+
+/* Optional: Add a hover effect for better interactivity */
+a:hover {
+    color: #a9c7f9; /* A slightly brighter blue */
+}
 
 /* Style for containers like the upload form */
 .upload-form {
@@ -63,14 +71,19 @@ table, th, td {
     border-color: #444;
 }
 
+.time-column {
+    width: 140px; /* Adjust this value as needed */
+}
+
+
 /* Dark theme for buttons */
 button, .process-button {
     background-color: #004d40; /* A dark teal */
     color: #ffffff;
     border-color: #004d40;
-    padding: 1.2rem; 
+    padding: 1.5rem; 
     font-weight: bold;
-    font-size: 1.5rem;
+    font-size: 1.8rem;
 }
 button:hover, .process-button:hover {
     background-color: #00695c; /* A slightly lighter teal for hover */

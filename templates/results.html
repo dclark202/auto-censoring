@@ -83,7 +83,10 @@
                     <h5>Transcript</h5>
                     <table>
                         <thead>
-                            <tr><th>Time</th><th>Line</th></tr>
+                            <tr>
+                                <th class="'time-column">Time</th>
+                                <th>Line</th>
+                            </tr>
                         </thead>
                         <tbody>
                             {% for segment in result.transcript %}
@@ -103,10 +106,14 @@
                 </div>
             {% endfor %}
         </div>
-    </div><footer>
+    </div>
+    
+    <footer>
         <hr>
         <p>
-            &copy; 2025 FSP Finder | <a href="https://github.com/dclark202/auto-censoring">View Project on GitHub</a>
+            &copy; 2025 FSP Finder | 
+            <a href="https://github.com/dclark202/auto-censoring">View project on GitHub</a> |
+            <a href="{{ url_for('contact') }}">Contact us</a>
         </p>
     </footer>
 

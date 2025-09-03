@@ -1,8 +1,10 @@
 # app.py
-from flask import Flask, render_template, request, Response
+from flask import Flask, render_template, request, Response, jsonify
 import requests
 import os, json
 from urllib.parse import unquote
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail, ReplyTo
 
 app = Flask(__name__)
 
@@ -59,17 +61,14 @@ def finalize():
     if not job_id:
         return "Missing job_id", 400
     
-    # --- THIS IS THE FIX ---
-    # Default to an empty list.
     ids_to_censor = []
-    # Only try to parse the JSON if the string is not None and not empty.
     if ids_json_str:
         try:
             ids_to_censor = json.loads(ids_json_str)
         except json.JSONDecodeError:
             # This handles cases where the string is not empty but is malformed.
             return "Invalid format for ids_to_censor.", 400
-    # --- End of Fix ---
+
         
     try:
         # Create the payload for the backend, including the user's custom list
@@ -101,3 +100,45 @@ def finalize():
     except requests.exceptions.RequestException as e:
         print(f"ERROR communicating with backend: {e}")
         return f"An error occurred while finalizing the file: {e}", 500
+
+        
+
+@app.route('/contact', methods=['GET', 'POST'])
+def contact():
+    if request.method == 'POST':
+        name = request.form.get('name')
+        email = request.form.get('email')
+        message = request.form.get('message')
+
+        # Basic validation
+        if not all([name, email, message]):
+            return jsonify({'status': 'error', 'message': 'All fields are required.'}), 400
+
+        try:
+            # Create the Mail object without the reply_to argument
+            email_message = Mail(
+                from_email='contact@fspfinder.com',
+                to_emails='contact@fspfinder.com',
+                subject=f'FSP Finder - {name}',
+                html_content=f'<strong>Name:</strong> {name}<br>'
+                             f'<strong>Email:</strong> {email}<br><br>'
+                             f'<strong>Message:</strong><p>{message}</p>')
+
+            # Create a ReplyTo object and assign it to the message
+            email_message.reply_to = ReplyTo(email, name)
+
+            # Get the API key and send the message as before
+            sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
+            response = sg.send(email_message)
+            
+            return jsonify({'status': 'success', 'message': 'Thank you for your message!'})
+        except Exception as e:
+            print(e)
+            return jsonify({'status': 'error', 'message': 'An error occurred while sending your message.'}), 500
+
+    # For a GET request, just show the contact page
+    return render_template('contact.html')
+
+@app.route('/terms')
+def terms():
+    return render_template('terms.html')
