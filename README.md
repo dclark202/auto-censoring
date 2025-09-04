@@ -1,4 +1,4 @@
-## Available for use at our website [www.fspfinder.com](www.fspfinder.com)
+## Available for use at our [website](https://www.fspfinder.com)!
 
 Watch the project video by clicking on the image below (Note: some of the material in this video is now outdated with the release of the webite.)
 
