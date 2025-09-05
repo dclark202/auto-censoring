@@ -1,0 +1,19 @@
+# docker-compose.yml
+version: '3.8'
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend.Dockerfile
+    env_file:
+      - .env
+    # This service is only accessible internally by the frontend
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend.Dockerfile
+    ports:
+      - "7860:7860" # This exposes the Flask app to the outside world
+    depends_on:
+      - backend

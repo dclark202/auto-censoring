@@ -518,29 +518,6 @@ async def finalize_file(request: FinalizeRequest):
 
     print(f"Finalizing edits for job {job_id} with {len(ids_to_censor)} words to censor...")
     try:
-        # --- NEW CODE BLOCK TO SAVE TRAINING DATA ---
-        # 1. Prepare the data object you want to save.
-        data_to_save = {
-            "metadata": analysis_state.get('metadata'),
-            "transcript": analysis_state.get('transcript'),
-            "final_censored_ids": ids_to_censor  # The user's final edits
-        }
-        
-        # 2. Define the directory and create it if it doesn't exist.
-        save_dir = "training_data"
-        os.makedirs(save_dir, exist_ok=True)
-        
-        # 3. Create a unique filename for the JSON file.
-        base_name = os.path.splitext(analysis_state['original_filename'])[0]
-        json_filename = f"{base_name}_{job_id[:8]}.json"
-        save_path = os.path.join(save_dir, json_filename)
-        
-        # 4. Write the data to the JSON file on your local machine.
-        with open(save_path, 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, indent=2)
-        print(f"Saved training data to {save_path}")
-        # --- END OF NEW CODE BLOCK ---
-        
         output_path = apply_censoring(analysis_state, ids_to_censor)
 
         if not output_path:
