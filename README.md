@@ -1,6 +1,6 @@
 ## About
 
-This repository contains training and methodology files for FSP Finder. The final product, including code for hosting a local version of the web app, can be found [here](https://github.com/dclark202/fsp-finder). The full application can be used at our website [www.fspfinder.com](https://www.fspfinder.com).
+### This repository contains training and methodology files for FSP Finder. The final product, including code for hosting a local version of the web app, can be found [here](https://github.com/dclark202/fsp-finder). The full application can be used at our website [www.fspfinder.com](https://www.fspfinder.com).
 
 Watch the project video by clicking on the image below (Note: some of the material in this video is now outdated with the release of the webite.)
 
